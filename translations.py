@@ -1,0 +1,403 @@
+"""All EN ↔ ZH translations for the Sales Dashboard.
+
+Usage inside server():
+    from translations import T_UI
+    title = T_UI(input.ui_lang(), "executive_overview_title")
+"""
+
+ZH = {
+    # ── Tab names ─────────────────────────────────────────────────────────────
+    "tab_executive_overview":        "执行概览",
+    "tab_performance_comparison":    "业绩对比",
+    "tab_revenue_orders":            "收入与订单",
+    "tab_market_intelligence":       "市场洞察",
+    "tab_operational_intelligence":  "运营智能",
+    "tab_supplier_performance":      "供应商绩效",
+    "tab_product_denomination":      "产品与面值",
+    "tab_customer_analytics":        "客户分析",
+
+    # ── Sidebar labels ────────────────────────────────────────────────────────
+    "lbl_filters":           "高级筛选",
+    "lbl_segment":           "客户分类",
+    "lbl_region":            "地区 / 洲",
+    "lbl_country":           "市场（国家）",
+    "lbl_currency":          "报告货币",
+    "lbl_trend_period":      "报告周期",
+    "lbl_date_range":        "日期范围",
+    "lbl_apply":             "↵ 应用",
+    "lbl_download":          "下载 / 导出",
+
+    # ── Executive Overview ────────────────────────────────────────────────────
+    "h_alerts":              "🚨 异常检测与预警",
+    "h_top_movers":          "⚡ 环比 Top 变动榜",
+    "h_revenue_trend":       "📊 收入与订单趋势",
+    "h_revenue_segment_pie": "🍩 各客户分类收入占比",
+    "h_region_donut":        "🌍 各地区收入占比",
+    "h_top5_markets":        "🏆 收入前 5 大市场",
+    "h_segment_summary":     "📋 分部业绩汇总",
+
+    # ── Performance Comparison ────────────────────────────────────────────────
+    "h_period_vs_period":    "📅 时间段对比分析",
+
+    # ── Revenue & Orders ──────────────────────────────────────────────────────
+    "h_revenue_orders_kpis": "💰 收入与订单核心指标",
+    "h_aov_segment":         "💳 各分部平均订单价值 (AOV)",
+    "h_revenue_by_segment":  "📊 各分部收入 (GMV)",
+    "h_orders_by_segment":   "📦 各分部订单量",
+    "h_revenue_country_table":"📋 各市场收入与订单汇总",
+
+    # ── Market Intelligence ───────────────────────────────────────────────────
+    "h_world_map":           "🗺️ 全球收入分布（世界地图）",
+    "h_revenue_momentum":    "🚀 收入动能：增长最快 vs 📉 下滑最大",
+    "h_top_markets_revenue": "🌍 按收入排名前15市场 (GMV)",
+    "h_top_markets_orders":  "📦 按订单量排名前15市场",
+    "h_aov_by_market":       "💎 各市场平均订单价值 (AOV)",
+    "h_opportunity_matrix":  "💎 市场机会矩阵（订单量 × AOV）",
+    "h_expansion_radar":     "🧭 市场拓展雷达 — 战略四象限",
+    "h_monthly_heatmap":     "📅 各市场月度收入热力图（前15）",
+    "h_orders_by_segment_mkt":"📊 各市场订单量（按客户分类）",
+    "h_market_scorecard":    "📋 市场 KPI 评分卡",
+
+    # ── Operational Intelligence ──────────────────────────────────────────────
+    "h_ops_kpis":            "📊 运营核心指标",
+    "h_revenue_velocity":    "📈 收入速度 — 收入与订单量趋势",
+    "h_daily_delta":         "📉 日环比收入变化",
+    "h_activity_heatmap":    "🕐 订单活跃度热力图（星期 × 小时）",
+
+    # ── Supplier & Operator Performance ──────────────────────────────────────
+    "h_supplier_kpis":       "🤝 供应商绩效快照",
+    "h_gross_margin":        "💰 各运营商毛利润",
+    "h_margin_trend":        "📈 毛利率趋势",
+    "h_concentration_card":  "🥧 供应商集中度风险",
+    "h_pareto":              "📊 收入集中度（帕累托分析）",
+    "h_operator_trend":      "📈 运营商收入趋势",
+    "h_top_operators_rev":   "🏆 按收入排名的运营商",
+    "h_top_operators_orders":"📦 按订单量排名的运营商",
+    "h_operator_scorecard":  "📋 运营商绩效评分卡",
+    "h_operator_summary":    "📋 运营商汇总",
+
+    # ── Product & Denomination Analysis ───────────────────────────────────────
+    "h_product_treemap":     "🌳 产品收入结构（树图）",
+    "h_product_trend":       "📈 前5产品收入趋势",
+    "h_product_revenue":     "📦 按收入排名产品 (GMV)",
+    "h_product_segment":     "📊 按客户分类的产品排名",
+    "h_denom_band":          "💵 面值档位收入贡献率 (%)",
+    "h_denom_heatmap":       "🔢 面值 × 运营商订单矩阵",
+    "h_top_denoms":          "🔝 按订单量排名的充值面值",
+    "h_denom_scorecard":     "📋 面值绩效评分卡",
+    "h_product_summary":     "📋 产品汇总",
+
+    # ── Customer Analytics ────────────────────────────────────────────────────
+    "h_customer_kpis":       "👥 客户核心指标",
+    "h_new_vs_returning":    "🔄 新客户 vs 回购客户",
+    "h_acquisition_rate":    "📈 每月新客户获取量",
+    "h_cohort_retention":    "📊 客户留存率（按获客批次）",
+    "h_cohort_ltv":          "💰 累计客户终身价值 (CLV)",
+    "h_order_frequency":     "📊 下单频次分布",
+    "h_orders_per_customer": "📊 各分类平均每客户订单数",
+    "h_customer_summary":    "📋 客户汇总",
+
+    # ── KPI card labels ───────────────────────────────────────────────────────
+    "kpi_total_revenue":     "总收入 (GMV)",
+    "kpi_total_orders":      "订单总量",
+    "kpi_aov":               "平均订单价值",
+    "kpi_active_customers":  "活跃客户数",
+    "kpi_active_markets":    "活跃市场数",
+    "kpi_mom_growth":        "环比增长率",
+    "kpi_total_suppliers":   "供应商总数",
+    "kpi_active_operators":  "活跃运营商",
+    "kpi_gross_margin":      "毛利润",
+    "kpi_top3_concentration":"前3集中度",
+    "kpi_operator_aov":      "运营商 AOV",
+    "kpi_avg_daily_revenue": "日均收入",
+    "kpi_avg_daily_orders":  "日均订单数",
+    "kpi_peak_day":          "最高收入日",
+    "kpi_peak_hour":         "高峰时段",
+}
+
+EN = {k: k for k in ZH}  # identity mapping so T_UI(lang, key) works for EN too
+
+# Real English labels (used when building strings)
+EN_LABELS = {
+    "tab_executive_overview":        "Executive Overview",
+    "tab_performance_comparison":    "Performance Comparison",
+    "tab_revenue_orders":            "Revenue & Orders",
+    "tab_market_intelligence":       "Market Intelligence",
+    "tab_operational_intelligence":  "Operational Intelligence",
+    "tab_supplier_performance":      "Supplier & Operator Performance",
+    "tab_product_denomination":      "Product & Denomination Analysis",
+    "tab_customer_analytics":        "Customer Analytics",
+    "lbl_filters":     "Advanced Filters",
+    "lbl_segment":     "Customer Segment",
+    "lbl_region":      "Region / Continent",
+    "lbl_country":     "Market (Country)",
+    "lbl_currency":    "Reporting Currency",
+    "lbl_trend_period":"Reporting Period",
+    "lbl_date_range":  "Date Range",
+    "lbl_apply":       "↵  Enter",
+    "lbl_download":    "⬇ Download / Export",
+    "h_alerts":              "🚨 Anomaly Detection & Alerts",
+    "h_top_movers":          "⚡ Period-over-Period (PoP) Top Movers",
+    "h_revenue_trend":       "📊 Revenue & Orders Trend",
+    "h_revenue_segment_pie": "🍩 Revenue by Customer Segment",
+    "h_region_donut":        "🌍 Revenue by Region",
+    "h_top5_markets":        "🏆 Top 5 Markets by Revenue",
+    "h_segment_summary":     "📋 Segment Performance Summary",
+    "h_world_map":           "🗺️ Global Revenue Distribution (World Map)",
+    "h_revenue_momentum":    "🚀 Revenue Momentum: Top Risers vs 📉 Top Decliners",
+    "h_top_markets_revenue": "🌍 Top Markets by Revenue (GMV)",
+    "h_top_markets_orders":  "📦 Top Markets by Order Volume",
+    "h_aov_by_market":       "💎 Average Order Value (AOV) by Market",
+    "h_opportunity_matrix":  "💎 Market Opportunity Matrix (Volume × AOV)",
+    "h_expansion_radar":     "🧭 Market Expansion Radar — Strategic Quadrant Classification",
+    "h_monthly_heatmap":     "📅 Monthly Revenue Heatmap by Market (Top 15)",
+    "h_orders_by_segment_mkt":"📊 Order Volume by Market and Customer Segment",
+    "h_market_scorecard":    "📋 Market KPI Scorecard",
+    "h_ops_kpis":            "📊 Operational KPIs",
+    "h_revenue_velocity":    "📈 Revenue Velocity — Revenue & Order Volume Trend",
+    "h_daily_delta":         "📉 Day-over-Day Revenue Change (%)",
+    "h_activity_heatmap":    "🕐 Order Activity Heatmap (Day × Hour)",
+    "h_supplier_kpis":       "🤝 Operator Performance Snapshot",
+    "h_gross_margin":        "💰 Gross Margin by Operator",
+    "h_margin_trend":        "📈 Gross Margin % Trend by Operator",
+    "h_concentration_card":  "🥧 Supplier Concentration Risk",
+    "h_pareto":              "📊 Revenue Concentration (Pareto Analysis)",
+    "h_operator_trend":      "📈 Operator Revenue Trend",
+    "h_top_operators_rev":   "🏆 Top Operators by Revenue",
+    "h_top_operators_orders":"📦 Top Operators by Order Volume",
+    "h_operator_scorecard":  "📋 Operator Performance Scorecard",
+    "h_operator_summary":    "📋 Operator Summary",
+    "h_product_treemap":     "🌳 Product Revenue Mix (Treemap)",
+    "h_product_trend":       "📈 Top 5 Products — Revenue Trend",
+    "h_product_revenue":     "📦 Top Products by Revenue (GMV)",
+    "h_product_segment":     "📊 Top Products by Customer Segment",
+    "h_denom_band":          "💵 Recharge Denomination Band Revenue Contribution (%)",
+    "h_denom_heatmap":       "🔢 Denomination × Operator Order Matrix",
+    "h_top_denoms":          "🔝 Top Recharge Denominations by Order Volume (All Operators)",
+    "h_denom_scorecard":     "📋 Denomination Performance Scorecard",
+    "h_product_summary":     "📋 Product Summary",
+    "h_customer_kpis":       "👥 Customer KPIs",
+    "h_new_vs_returning":    "🔄 New vs. Returning Customers",
+    "h_acquisition_rate":    "📈 Monthly Customer Acquisition Rate",
+    "h_cohort_retention":    "📊 Customer Retention Rate by Acquisition Cohort",
+    "h_cohort_ltv":          "💰 Cumulative Lifetime Value (LTV) by Cohort",
+    "h_order_frequency":     "📊 Order Frequency Distribution",
+    "h_orders_per_customer": "📊 Avg Orders per Customer by Segment",
+    "h_customer_summary":    "📋 Customer Summary",
+    "kpi_total_revenue":     "Total Revenue (GMV)",
+    "kpi_total_orders":      "Total Orders",
+    "kpi_aov":               "Avg Order Value",
+    "kpi_active_customers":  "Active Customers",
+    "kpi_active_markets":    "Active Markets",
+    "kpi_mom_growth":        "MoM Growth",
+    "kpi_total_suppliers":   "Total Suppliers",
+    "kpi_active_operators":  "Active Operators",
+    "kpi_gross_margin":      "Gross Margin",
+    "kpi_top3_concentration":"Top-3 Concentration",
+    "kpi_operator_aov":      "Operator AOV",
+    "kpi_avg_daily_revenue": "Avg Daily Revenue",
+    "kpi_avg_daily_orders":  "Avg Daily Orders",
+    "kpi_peak_day":          "Peak Revenue Day",
+    "kpi_peak_hour":         "Peak Order Hour",
+}
+
+
+def T_UI(lang: str, key: str) -> str:
+    """Return translated string for key in lang ('en'|'zh').
+
+    Falls back to the EN_LABELS value, then the key itself.
+    """
+    if lang == "zh":
+        return ZH.get(key, EN_LABELS.get(key, key))
+    return EN_LABELS.get(key, key)
+
+
+# ── Chart phrase dictionary ──────────────────────────────────────────────────
+# Used by the server-side `_tt()` translator: when the UI language is Chinese,
+# every chart title / axis title / legend name / table header runs through an
+# ordered longest-first substring replacement over this map. Dynamic parts
+# (currency labels, numbers) survive untouched.
+
+CHART_PHRASES: dict[str, str] = {
+    # ---- full chart titles (longest phrases first by construction) ----
+    "Monthly Customer Acquisition Rate — New Customers by First-Order Month (B2C, Full History)":
+        "月度新客获取 — 按首单月份统计 (B2C, 全部历史)",
+    "Iraq Pinstore — Weekly Orders per Operator × Denomination (Last 12 Weeks)":
+        "伊拉克PIN店 — 每周订单 · 运营商 × 面值（近12周）",
+    "Iraq Pinstore — Weekly PIN Order Volume by SKU (Last 12 Weeks)":
+        "伊拉克PIN店 — 每周PIN订单量 · 按SKU（近12周）",
+    "Successful Orders Missing Supplier Order ID — by Operator": "缺少接口商订单号的成功订单 — 按运营商",
+    "Revenue by Denomination × Operator (Top 15 denominations)": "面值 × 运营商收入（前15面值）",
+    "Random Forest — Feature Importance (Churn Prediction)": "随机森林 — 特征重要性（流失预测）",
+    "Top 5 Products — Monthly Revenue (GMV) Trend": "前5产品 — 月度收入(GMV)趋势",
+    "Country expansion radar · classified by Orders × AOV": "市场拓展雷达 · 按订单量 × AOV分类",
+    "Country potential matrix · top 40 countries by sales": "市场潜力矩阵 · 销售额前40国家",
+    "Coupon vs Non-Coupon Customers — Value & Loyalty": "用券 vs 未用券客户 — 价值与忠诚度",
+    "Cross-Border Recharges — order market → destination": "跨境充值 — 下单市场 → 充值目的地",
+    "Cumulative LTV curves · last 6 cohorts vs average": "累计LTV曲线 · 最近6批次与平均值",
+    "Data Package — Orders & Revenue by Package Size": "流量套餐 — 各规格订单与收入",
+    "Data Package Orders by Operator × Volume Size": "流量套餐订单 · 运营商 × 套餐规格",
+    "Airtime Orders by Denomination (Top 20)": "话费各面值订单量（前20）",
+    "Airtime Top Denominations × Operator (orders)": "话费主要面值 × 运营商（订单量）",
+    "Average Order Value (AOV) by Customer Segment": "各客户分类平均订单价值 (AOV)",
+    "Average Order Value (AOV) by Market · Top 15": "各市场平均订单价值 (AOV) · 前15",
+    "Average orders per user · by segment": "每用户平均订单数 · 按客户分类",
+    "Avg Recharge Denomination by Market": "各市场平均充值面值",
+    "Coupon Spend vs Coupon-Order Revenue": "优惠券支出 vs 券单收入",
+    "Daily sales · aligned by day-of-period": "每日销售 · 按周期内天数对齐",
+    "Data Package Revenue by Size Tier": "流量套餐收入 · 按规格档位",
+    "Day-over-Day Revenue Change (%)": "日环比收入变化 (%)",
+    "Featured (Badge) vs Non-Featured Products": "角标产品 vs 非角标产品对比",
+    "Global IP Origin Distribution (B2C)": "全球IP来源分布 (B2C)",
+    "Gross Margin % Trend by Operator (Top 6)": "各运营商毛利率趋势（前6）",
+    "Gross Margin by Product Category": "各产品类别毛利",
+    "Monthly Refund Rate by Segment": "各客户分类月度退款率",
+    "Monthly Revenue by Category (Top 6)": "各类别月度收入（前6）",
+    "Monthly sales heatmap · top 15 countries": "月度销售热力图 · 前15国家",
+    "New vs. Returning Customers (B2C)": "新客户 vs 回购客户 (B2C)",
+    "New-User Promo Orders by Month": "新人优惠订单月度趋势",
+    "Operator volume trend · top 7": "运营商销量趋势 · 前7",
+    "Order Count by Status × Segment": "各状态 × 客户分类订单量",
+    "Order Volume by Operator × Product Category": "运营商 × 产品类别订单量",
+    "Orders by Operator × Denomination": "运营商 × 面值订单量",
+    "Pareto · top 20 operators": "帕累托分析 · 前20运营商",
+    "Product mix by segment (top 30)": "各客户分类产品结构（前30）",
+    "ROC Curves — Model Comparison": "ROC曲线 — 模型对比",
+    "Recharges per Beneficiary Number": "每个受益号码的充值次数",
+    "Refund Rate by Operator (≥200 orders, Top 10)": "各运营商退款率（≥200单，前10）",
+    "Revenue & Orders by Product Category": "各产品类别收入与订单量",
+    "Revenue (GMV) by Operator × Product Category": "运营商 × 产品类别收入 (GMV)",
+    "Revenue Contribution by Denomination Band": "面值档位收入贡献",
+    "Revenue Contribution by Region": "各地区收入贡献",
+    "Revenue Forecast — Next": "收入预测 — 未来",
+    "Sales by country · world map": "各国销售 · 世界地图",
+    "Time from Registration to First Purchase (B2C)": "注册到首购时长 (B2C)",
+    "Top 10 countries · orders by segment": "前10国家 · 各客户分类订单量",
+    "Top 10 countries by orders": "订单量前10国家",
+    "Top 10 countries by sales": "销售额前10国家",
+    "Top 10 operators by orders": "订单量前10运营商",
+    "Top 10 operators by sales": "销售额前10运营商",
+    "Top 10 products by sales": "销售额前10产品",
+    "Top 15 IP Countries (B2C Order Origin)": "IP国家前15 (B2C下单来源)",
+    "Top 15 Recharge Destinations (by calling code)": "充值目的地前15（按区号）",
+    "Top 15 countries by orders": "订单量前15国家",
+    "Top 15 countries by sales": "销售额前15国家",
+    "Top 15 operators · cost vs margin": "前15运营商 · 成本与毛利",
+    "Top 20 B2B Agents by Revenue": "收入前20 B2B代理商",
+    "Top 20 denominations by orders": "订单量前20面值",
+    "Top 5 Markets by Revenue (GMV)": "收入前5市场 (GMV)",
+    "Top 5 products per segment": "各客户分类前5产品",
+    "User order-frequency distribution": "用户下单频次分布",
+    "When customers buy · weekday × hour": "客户购买时段 · 星期 × 小时",
+    "sales (line) vs orders (bars)": "销售(线) vs 订单(柱)",
+    "Sales by segment": "各客户分类销售额",
+    "Orders by segment": "各客户分类订单量",
+    "Sales Trend": "销售趋势",
+    "Sales mix": "销售结构",
+    # ---- axis titles / smaller fragments ----
+    "Day within period (0 = first day)": "周期内第几天（0=首日）",
+    "Cohort (month of first order)": "批次（首单月份）",
+    "Months since first order": "首单后月数",
+    "Share of all orders (%)": "占全部订单比例 (%)",
+    "Top-ups received": "被充值次数",
+    "Avg orders per user": "每用户平均订单数",
+    "Orders per user": "每用户订单数",
+    "Avg order value": "平均订单价值",
+    "Avg Denomination": "平均面值",
+    "Cumulative LTV / user": "累计LTV / 用户",
+    "False Positive Rate": "假阳性率",
+    "True Positive Rate": "真阳性率",
+    "Importance Score": "重要性分数",
+    "Number of Customers": "客户数",
+    "New Customers": "新客户数",
+    "Unique numbers": "唯一号码数",
+    "Refund rate (%)": "退款率 (%)",
+    "Gross Margin (%)": "毛利率 (%)",
+    "Product Category": "产品类别",
+    "Package Size": "套餐规格",
+    "Size Tier": "规格档位",
+    "Hour of day": "小时",
+    "Week Starting": "周起始",
+    "Change (%)": "变化 (%)",
+    # ---- legend / trace names ----
+    "4-wk Rolling Avg": "4周滚动均值",
+    "Actual Revenue": "实际收入",
+    "Cost (Settlement)": "成本（结算价）",
+    "Cost (settlement)": "成本（结算价）",
+    "Coupon-order GMV": "券单收入",
+    "Coupon spend": "优惠券支出",
+    "New-user promo orders": "新人优惠订单",
+    "Cumulative %": "累计占比 %",
+    "Gross Margin": "毛利",
+    "Period A": "时段A",
+    "Period B": "时段B",
+    "Random": "随机基线",
+    "Average": "平均",
+    # ---- table headers ----
+    "Campaign / Coupon": "活动 / 优惠券",
+    "GMV per 1 Spend": "每1元券支出GMV",
+    "Avg Revenue/Customer": "客均收入",
+    "Repeat Purchase %": "复购率 %",
+    "Total Customers": "客户总数",
+    "Source / Group": "来源 / 分组",
+    "Avg Transaction": "平均交易额",
+    "Pct of Total Sales": "销售占比",
+    "Pct of Total": "占比",
+    "Sales Share %": "销售占比 %",
+    "Orders Share %": "订单占比 %",
+    "Revenue Share %": "收入占比 %",
+    "Cum. Share %": "累计占比 %",
+    "Orders per User": "每用户订单数",
+    "Total Sales": "总销售额",
+    "Total Orders": "总订单量",
+    "Total Revenue": "总收入",
+    "Total Cost": "总成本",
+    "Unique Users": "独立用户数",
+    "Avg Orders": "平均订单数",
+    "Avg Sale": "平均售价",
+    "Avg sale": "平均售价",
+    "Avg Discount": "平均折扣",
+    "Coupon Spend": "优惠券支出",
+    "Order GMV": "订单GMV",
+    "Agent Name": "代理商名称",
+    "Agent ID": "代理商ID",
+    "Order ID": "订单号",
+    "Margin %": "毛利率 %",
+    "Growth %": "增长率 %",
+    "Share %": "占比 %",
+    "Transactions": "交易笔数",
+    "Denomination": "面值",
+    "Operator": "运营商",
+    "Customers": "客户数",
+    "Segment": "客户分类",
+    "Country": "国家",
+    "Product": "产品",
+    "Margin": "毛利",
+    "Status": "状态",
+    "Total": "合计",
+    "Amount": "金额",
+    # ---- generic fallbacks (applied last — keep at the bottom) ----
+    "Daily": "每日", "Weekly": "每周", "Monthly": "每月",
+    "Quarterly": "每季度", "Yearly": "每年",
+    "Revenue": "收入",
+    "Orders": "订单量",
+    "Sales": "销售额",
+    "Users": "用户数",
+    "Week": "周",
+}
+
+# Longest-first ordering so e.g. 'Total Sales' wins over 'Sales'.
+CHART_PHRASES_SORTED: list[tuple[str, str]] = sorted(
+    CHART_PHRASES.items(), key=lambda kv: len(kv[0]), reverse=True
+)
+
+
+def translate_chart_text(text):
+    """EN→ZH substring translation for chart titles / axis labels / headers."""
+    if text is None:
+        return text
+    out = str(text)
+    for en, zh in CHART_PHRASES_SORTED:
+        if en in out:
+            out = out.replace(en, zh)
+    return out

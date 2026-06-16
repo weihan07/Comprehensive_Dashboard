@@ -1,0 +1,32 @@
+# ── Virtual environment (1GB, machine-specific — recreate from requirements.txt) ──
+sales_env/
+venv/
+.venv/
+
+# ── Real business + customer data (PII: phone numbers, IPs, user IDs) — DO NOT publish ──
+database/
+*.parquet
+*.xlsx
+*.xls
+*.csv
+
+# ── Generated / cached artifacts ──
+static/
+__pycache__/
+*.py[cod]
+*$py.class
+.ipynb_checkpoints/
+
+# ── Logs & runtime output ──
+*.log
+dashboard_stderr.log
+dashboard_stdout.log
+
+# ── Editor / OS ──
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db
+
+# ── Generated documentation export (regenerate via generate_doc_pdf.py) ──
+Sales_Dashboard_Documentation.pdf

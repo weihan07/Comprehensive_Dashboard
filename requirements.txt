@@ -1,0 +1,13 @@
+# Global Mobile Recharge — Revenue Intelligence Dashboard
+# Python 3.11+ (developed against the project's sales_env)
+# Install:  python -m venv sales_env && sales_env\Scripts\pip install -r requirements.txt
+
+shiny==1.6.0
+pandas==3.0.2
+pyarrow==24.0.0
+plotly==6.7.0
+numpy==2.4.4
+scikit-learn==1.9.0
+reportlab==4.5.1
+XlsxWriter==3.2.9
+openpyxl==3.1.5
