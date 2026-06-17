@@ -9,6 +9,17 @@ database/
 *.xlsx
 *.xls
 *.csv
+*.db
+*.sqlite
+*.sqlite3
+*.bak
+~$*          # Excel/Word lock & temp files
+
+# ── Local config & secrets (machine-specific, never publish) ──
+.env
+.env.*
+local_config.py
+secrets.toml
 
 # ── Generated / cached artifacts ──
 static/

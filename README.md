@@ -24,8 +24,14 @@ Customer Analytics · Marketing & Promotions · ⏱ Sales Explorer · 🤖 AI Pr
 ## Setup
 
 ```bash
+# 1. create the virtualenv and install dependencies
 python -m venv sales_env
 sales_env\Scripts\pip install -r requirements.txt
+
+# 2. enable the data-leak guard (one time, per clone) — see Data & Security
+git config core.hooksPath githooks
+
+# 3. seed the local database/ folder (it is NOT in the repo) — see Data & Security
 ```
 
 ## Run
@@ -36,14 +42,40 @@ sales_env\Scripts\python.exe -m shiny run sales_dashboard.py --port 8050
 
 Then open <http://127.0.0.1:8050>.
 
-## Data
+## Data & Security
 
-The dashboard reads `database/sales_cache.parquet` (rebuilt from rolling
-`Agent_Database.parquet` / `Master_Database.parquet`). These are git-ignored. To populate:
+**Model: code lives on GitHub, data stays on the local drive only.** The `database/` folder holds
+real customer PII (phone numbers, IPs, user IDs) and must **never** be committed or pushed.
 
-- Use the **Import Data** tab to upload the daily Agent (B2B) and Master (B2C) Excel exports —
-  they append cumulatively (de-duped on order id), or
-- Use **🔄 Rebuild Data Pipeline** to rebuild from the source `Agent Data.xlsx` / `Master Data.xlsx`.
+**The rules that enforce this:**
+
+- `.gitignore` excludes `database/` and every data extension (`*.parquet`, `*.xlsx`, `*.xls`,
+  `*.csv`, `*.db`, `*.sqlite*`), plus local config/secrets (`.env`, `local_config.py`, `secrets.toml`).
+- A version-controlled **pre-commit hook** (`githooks/pre-commit`) hard-blocks any commit that stages
+  a data file — including the `git add -f` case that `.gitignore` alone does not stop. Git hooks are
+  not copied on clone, so each clone must enable it once:
+
+  ```bash
+  git config core.hooksPath githooks
+  ```
+
+  To verify it works, try `git add -f database/anything.csv && git commit -m test` — the commit
+  should be rejected.
+
+**Seeding the local `database/` after a fresh clone** (the folder is intentionally absent). The
+dashboard reads `database/sales_cache.parquet` (rebuilt from rolling `Agent_Database.parquet` /
+`Master_Database.parquet`). Populate it one of two ways:
+
+- **Import Data tab** — upload the daily Agent (B2B) and Master (B2C) Excel exports; they append
+  cumulatively (de-duped on order id). *Recommended for teammates on any machine.*
+- **🔄 Rebuild Data Pipeline** / `python init_database.py` — rebuilds from the source
+  `Agent Data.xlsx` / `Master Data.xlsx`. ⚠️ This currently reads a **hardcoded path** on the
+  original machine
+  (`C:\Disk\LiuLian Tech Sdn. Bhd\Report\Recon & Reverse Recon\Raw Data (30 Nov - 23 Mac)\…`).
+  Teammates without that exact folder should use the **Import Data tab** instead.
+
+The `database/` files are distributed through the company's internal channel only — **never** via
+GitHub.
 
 ## Module map
 
