@@ -8,8 +8,9 @@ import re as _re
 from pathlib import Path
 
 import db_utils
-from country_mapping import translate_country
+from country_mapping import translate_country, CN_TO_EN
 import theme as T
+import charts
 import fx_rates
 import remarks_utils
 try:
@@ -1126,10 +1127,16 @@ except FileNotFoundError as exc:
 
 segment_choices = ["All"] + sorted(data['segment'].dropna().astype(str).unique().tolist())
 _raw_country_choices = _clean_country_choices(data['country'])
-country_choices = ["All", "🔑 重点国家 (Key Countries)"] + _raw_country_choices
+
+# Country pseudo-filters (China-team 全球共用标准): 汇总 = all countries except
+# Malaysia; 全球 = countries NOT in 重点国家, also excluding Malaysia.
+_MALAYSIA = "Malaysia"
+_SUMMARY_LABEL = "📊 汇总 (Summary · 剔除大马)"
+_GLOBAL_LABEL  = "🌐 全球 (Global · 剔除大马)"
+_KEY_COUNTRIES_LABEL = "🔑 重点国家 (Key Countries)"
+country_choices = ["All", _SUMMARY_LABEL, _KEY_COUNTRIES_LABEL, _GLOBAL_LABEL] + _raw_country_choices
 
 _KEY_COUNTRIES_FILE = Path(__file__).parent / "database" / "key_countries.json"
-_KEY_COUNTRIES_LABEL = "🔑 重点国家 (Key Countries)"
 _KEY_COUNTRIES_DEFAULT = [
     "Malaysia", "Indonesia", "Saudi Arabia", "Mexico",
     "UAE", "Sri Lanka", "Iraq", "Kyrgyzstan",
@@ -1147,6 +1154,204 @@ def _save_key_countries(lst: list) -> None:
     _KEY_COUNTRIES_FILE.parent.mkdir(parents=True, exist_ok=True)
     with open(_KEY_COUNTRIES_FILE, "w", encoding="utf-8") as f:
         json.dump(lst, f, ensure_ascii=False, indent=2)
+
+
+def _filter_by_country(df, country):
+    """Apply the country selector incl. the China-team pseudo-options.
+
+    All/'' → no filter · 汇总 → all except Malaysia · 全球 → non-key countries
+    except Malaysia · 重点国家 → the key-country list · else → that single country.
+    """
+    if df is None or 'country' not in df.columns:
+        return df
+    if not country or country in ("All", ""):
+        return df
+    c = df['country'].astype(str)
+    if country == _SUMMARY_LABEL:
+        return df[c != _MALAYSIA]
+    if country == _GLOBAL_LABEL:
+        kc = set(_load_key_countries())
+        return df[(~c.isin(kc)) & (c != _MALAYSIA)]
+    if country == _KEY_COUNTRIES_LABEL:
+        kc = _load_key_countries()
+        return df[c.isin(kc)] if kc else df
+    return df[c == country]
+
+
+# ── Global exclusions (China-team 全球共用标准): core metrics drop 电子钱包 + TNG ──
+_EXCLUDE_EWALLET_TNG = True   # set False to include 电子钱包 / Touch'n Go dashboard-wide
+
+
+def _apply_global_exclusions(df):
+    """Drop 电子钱包 (e-wallet) and Touch'n Go (TNG) rows from core-metric frames."""
+    if not _EXCLUDE_EWALLET_TNG or df is None or 'product_category' not in df.columns:
+        return df
+    cat = df['product_category'].astype(str)
+    keep = ~(cat.str.contains('电子钱包', na=False)
+             | cat.str.contains('e-?wallet', case=False, na=False, regex=True)
+             | cat.str.contains('Touch', case=False, na=False))
+    return df[keep]
+
+
+def _reg_new_user_set(d):
+    """Standard 新客 set: B2C users whose 注册月 == 订单月 within d. {} if unavailable."""
+    if d is None or len(d) == 0 or not {'register_time', 'order_time', 'user_id'}.issubset(d.columns):
+        return set()
+    dd = d.dropna(subset=['register_time', 'order_time', 'user_id'])
+    if dd.empty:
+        return set()
+    regm = pd.to_datetime(dd['register_time'], errors='coerce').dt.to_period('M')
+    ordm = pd.to_datetime(dd['order_time'], errors='coerce').dt.to_period('M')
+    return set(dd.loc[regm == ordm, 'user_id'].astype(str).unique())
+
+
+_targets_cache = None
+
+
+def _load_targets():
+    """3.2 Targets / budget. Optional database/targets.csv
+    (columns: month [YYYY-MM], metric, target[RMB]). {} if absent.
+    metric 'revenue'/'gmv' drives the dashed plan line on the revenue trend."""
+    global _targets_cache
+    if _targets_cache is not None:
+        return _targets_cache
+    import csv
+    from pathlib import Path
+    out = {}
+    path = Path(__file__).parent / "database" / "targets.csv"
+    if path.exists():
+        try:
+            with open(path, encoding="utf-8-sig", newline="") as f:
+                for row in csv.DictReader(f):
+                    metric = (row.get("metric") or "revenue").strip().lower()
+                    mon = (row.get("month") or "").strip()
+                    try:
+                        tgt = float(row.get("target"))
+                    except (TypeError, ValueError):
+                        continue
+                    if mon:
+                        out[(metric, mon)] = tgt
+        except Exception:
+            out = {}
+    _targets_cache = out
+    return _targets_cache
+
+
+# ── 用户列表 (Users registration table) — exact 新客数 / 转化率 ─────────────────
+# Per 全球共用计算取数公式及标准, 新客数 & 转化率 come from the Users table, not the
+# order table. We look for 用户列表*.csv in database/ first, then the Report folder.
+_USER_LIST_GLOBS = [
+    str(Path(__file__).parent / "database" / "用户列表*.csv"),
+    r"C:\Disk\LiuLian Tech Sdn. Bhd\Report\Recon & Reverse Recon\Raw Data (30 Nov - 23 Mac)\用户列表*.csv",
+]
+_user_list_cache = None
+
+
+def _load_user_list():
+    """Load + cache the 用户列表 → frame [uid, reg_time, wechat, country_en].
+    Empty frame when no file is found. 渠道(微信/支付宝) from 会员来源."""
+    global _user_list_cache
+    if _user_list_cache is not None:
+        return _user_list_cache
+    import glob
+    path = None
+    for pattern in _USER_LIST_GLOBS:
+        hits = sorted(glob.glob(pattern))
+        if hits:
+            path = hits[-1]          # latest by filename (timestamped)
+            break
+    cols = ['uid', 'reg_time', 'wechat', 'country_en']
+    if not path:
+        _user_list_cache = pd.DataFrame(columns=cols)
+        return _user_list_cache
+    u = None
+    for enc in ('utf-8-sig', 'gb18030', 'utf-8'):
+        try:
+            u = pd.read_csv(path, encoding=enc, dtype=str)
+            break
+        except Exception:
+            continue
+    if u is None or 'ID' not in u.columns:
+        _user_list_cache = pd.DataFrame(columns=cols)
+        return _user_list_cache
+    out = pd.DataFrame()
+    out['uid'] = u['ID'].astype(str).str.strip().str.replace(r'\.0$', '', regex=True)
+    out['reg_time'] = pd.to_datetime(u.get('注册时间'), errors='coerce')
+    src = u.get('会员来源', pd.Series('', index=u.index)).astype(str)
+    out['channel'] = src.str.strip()                 # normalized 会员来源 (the source map)
+    out['wechat'] = ~src.str.contains('支付宝', na=False)
+    cn = u.get('来源国家', pd.Series(pd.NA, index=u.index)).astype('string').str.strip()
+    country_en = cn.map(CN_TO_EN).fillna(cn)
+    country_en = country_en.mask(cn.isna() | (cn == ''), pd.NA)
+    out['country_en'] = country_en
+    out = out[(out['uid'].notna()) & (out['uid'] != '') & (out['uid'] != 'nan')]
+    out = out[out['reg_time'].notna() & (out['reg_time'].dt.year > 1970)]
+    _user_list_cache = out.reset_index(drop=True)
+    print(f"[user_list] loaded {len(_user_list_cache):,} users from {path}", flush=True)
+    return _user_list_cache
+
+
+def _new_customer_ids(date_from, date_to, country):
+    """IDs registered within [date_from, date_to], scoped by the country selector
+    and channel rules (汇总 = WeChat only; WeChat needs non-empty country; Alipay
+    allowed). Returns (ids:set, available:bool)."""
+    ul = _load_user_list()
+    if ul is None or ul.empty:
+        return set(), False
+    d = ul
+    if date_from and date_to:
+        start = pd.to_datetime(date_from, errors='coerce')
+        end = pd.to_datetime(date_to, errors='coerce')
+        if pd.notna(start) and pd.notna(end):
+            if start > end:
+                start, end = end, start
+            d = d[(d['reg_time'] >= start) & (d['reg_time'] < end + pd.Timedelta(days=1))]
+    c = d['country_en'].astype('string')
+    wechat = d['wechat'].fillna(True)
+    if country == _SUMMARY_LABEL:
+        mask = wechat & c.notna() & (c != _MALAYSIA)            # 汇总 = 仅微信端, 剔除大马
+    elif country == _GLOBAL_LABEL:
+        kc = set(_load_key_countries())
+        mask = c.notna() & (~c.isin(kc)) & (c != _MALAYSIA)
+    elif country == _KEY_COUNTRIES_LABEL:
+        kc = set(_load_key_countries())
+        mask = c.notna() & c.isin(kc)
+    elif country and country not in ("All", ""):
+        mask = (c == country)
+    else:                                                       # All
+        mask = (wechat & c.notna()) | (~wechat)
+    mask = mask & ~(wechat & c.isna())                          # 微信端剔除国家为空
+    return set(d.loc[mask, 'uid'].unique()), True
+
+
+_channel_map_cache = None
+
+
+def _channel_map():
+    """uid → 会员来源 (normalized channel) from the 用户列表 — the 'dim_source_map'."""
+    global _channel_map_cache
+    if _channel_map_cache is not None:
+        return _channel_map_cache
+    ul = _load_user_list()
+    if ul is None or ul.empty or 'channel' not in ul.columns:
+        _channel_map_cache = {}
+    else:
+        cc = ul[ul['channel'].notna() & (ul['channel'] != '')]
+        _channel_map_cache = dict(zip(cc['uid'], cc['channel']))
+    return _channel_map_cache
+
+
+def _with_channel(d):
+    """Attach a normalized 'channel' (会员来源) column by joining order user_id to
+    the 用户列表. No-op if the userlist is unavailable."""
+    if d is None or len(d) == 0 or 'user_id' not in d.columns:
+        return d
+    m = _channel_map()
+    if not m:
+        return d
+    d = d.copy()
+    d['channel'] = d['user_id'].astype(str).str.replace(r'\.0$', '', regex=True).map(m)
+    return d
 # Only list regions that actually appear in the data, in the canonical order.
 _present_regions = set(data['region'].dropna().astype(str).unique().tolist()) if 'region' in data.columns else set()
 region_choices = ["All"] + [r for r in T.REGION_ORDER if r in _present_regions]
@@ -1204,6 +1409,241 @@ def _bl(en: str, zh: str):
     The server defines a local `_bl` with identical behaviour for use inside
     render functions; this module-level one serves the static UI."""
     return ui.HTML(f'<span class="lang-en">{en}</span><span class="lang-zh">{zh}</span>')
+
+
+# ── Guideline tab content ─────────────────────────────────────────────────────
+# Static catalogue of every visualization grouped by tab, a bitsbang↔dashboard
+# terminology quick-reference, and the proposed-removals list. No reactivity.
+
+_GTYPE_ZH = {
+    "KPI strip": "KPI卡组", "KPI alerts": "预警卡", "KPI cards": "KPI卡", "Delta cards": "差异卡",
+    "Bar + line": "柱+线", "Donut": "环形图", "Bar (H)": "横向柱", "Grouped bars": "分组柱",
+    "Table": "表格", "Controls": "控件", "Dual line": "双线", "3 tables": "3个表",
+    "Bars": "柱状图", "Stacked bar": "堆叠柱", "Line": "折线", "Choropleth map": "地图",
+    "Bubble scatter": "气泡散点", "Quadrant scatter": "象限散点", "Heatmap": "热力图",
+    "Table (Excel)": "表格(Excel)", "Bars (H)": "横向柱", "Colored bars": "涨跌柱",
+    "KPI flag": "指标标记", "Bar & lines": "柱+多线", "Bar + cum. line": "柱+累计线",
+    "Bar": "柱状图", "KPI + bar": "KPI+柱", "Treemap": "树图", "KPI + bar/line": "KPI+柱/线",
+    "Bars & lines": "柱与线", "Bars & matrix": "柱与矩阵", "Heatmaps": "热力图",
+    "Tables (Excel)": "表格(Excel)", "Stacked bars + pivot": "堆叠柱+透视",
+    "KPI, bar, table": "KPI/柱/表", "Funnel": "漏斗", "Badge + bar": "标记+柱",
+    "Donut / bar": "环形/柱", "Grouped bar": "分组柱", "Table (Excel/CSV)": "表格(Excel/CSV)",
+    "Line + band": "线+区间", "Feature bar + table": "特征柱+表", "Reference": "参考",
+}
+
+# Rows: (title_en, title_zh, type, use_en, use_zh)
+_GUIDELINE_TABS = [
+    ("📊", "Executive Overview", "执行概览", [
+        ("🧭 Operating Summary", "🧭 运营概览", "KPI strip", "11 China-team KPIs (营业额…转化率) on the 充值成功 basis with MoM.", "11项中国团队核心指标（营业额…转化率），充值成功口径，含环比。"),
+        ("🚨 Anomaly Detection & Alerts", "🚨 异常检测与预警", "KPI alerts", "Auto-flags slipping/surging operators & markets (7d vs 4-wk).", "自动标记异常的运营商与市场（近7天 vs 前4周）。"),
+        ("📊 Key Performance Indicators", "📊 核心绩效指标", "KPI cards", "GMV/orders/客单价/customers/markets/MoM/margin.", "营业额/订单/客单价/客户/市场/环比/毛利。"),
+        ("⚡ PoP Top Movers", "⚡ 环比变动榜", "Delta cards", "Biggest revenue movers vs the prior equal period.", "与上期相比变动最大的市场与运营商。"),
+        ("📈 Revenue & Order Volume Trend", "📈 收入与订单量趋势", "Bar + line", "GMV bars vs orders line — momentum.", "营业额柱 vs 订单线 — 走势。"),
+        ("🥧 Revenue by Customer Segment", "🥧 各客户分类收入", "Donut", "B2B vs B2C share of GMV.", "B2B 与 B2C 营业额占比。"),
+        ("🌐 Revenue Contribution by Region", "🌐 各地区收入贡献", "Donut", "Regional concentration / diversification.", "区域集中度 / 多元化。"),
+        ("🏆 Top 5 Markets by Revenue", "🏆 收入前5市场", "Bar (H)", "Highest-value countries at a glance.", "价值最高的国家速览。"),
+        ("🌏 Key Countries — Last 3 Months", "🌏 重点国家近3个月", "Grouped bars", "Last-3-month GMV per key country (充值成功).", "各重点国家近3个月营业额（充值成功）。"),
+        ("📋 Segment Performance Summary", "📋 分部业绩汇总", "Table", "GMV/orders/客单价/MoM/margin per segment.", "各分部 营业额/订单/客单价/环比/毛利。"),
+    ]),
+    ("🆚", "Performance Comparison", "业绩对比", [
+        ("🆚 Period A vs B picker", "🆚 时段A vs B 选择", "Controls", "Choose any two windows; swap A/B.", "选择任意两个时段；A/B 互换。"),
+        ("📊 KPI Variance A vs B", "📊 A vs B 指标差异", "Delta cards", "Revenue/orders/customers/客单价 side-by-side.", "营业额/订单/客户/客单价 并排对比。"),
+        ("📈 Revenue Trend Overlay", "📈 收入趋势叠加", "Dual line", "Both periods aligned to day-1.", "两个时段按首日对齐对比。"),
+        ("🏃 Top Movers (Market/Operator/Denomination)", "🏃 变动榜（市场/运营商/面值）", "3 tables", "Largest absolute revenue deltas.", "绝对营业额变化最大项。"),
+    ]),
+    ("💰", "Revenue & Orders", "收入与订单", [
+        ("💰 Revenue & Orders KPIs", "💰 收入与订单核心指标", "KPI cards", "营业额/orders/客单价/customers/margin/success.", "营业额/订单/客单价/客户/毛利/成单率。"),
+        ("💎 Revenue / Orders / 客单价 by Segment", "💎 各分部 收入/订单/客单价", "Bars", "B2B vs B2C on each money metric.", "B2B vs B2C 各金额指标。"),
+        ("📋 Revenue & Orders by Market", "📋 各市场收入与订单", "Table", "Per-country B2B/B2C revenue/orders/客单价/margin.", "各国 B2B/B2C 营业额/订单/客单价/毛利。"),
+        ("🚦 Order Status KPIs", "🚦 订单状态指标", "KPI cards", "Success / refund / cancellation rates.", "成单率 / 退款率 / 取消率。"),
+        ("📊 Order Count by Status × Segment", "📊 各状态×分部订单量", "Stacked bar", "Where refunds/cancellations concentrate.", "退款/取消集中在哪。"),
+        ("📉 Monthly Refund Rate Trend", "📉 月度退款率趋势", "Line", "Refund-rate trajectory by segment.", "各分部退款率走势。"),
+        ("⚠ Refund Rate by Operator (Top 10)", "⚠ 各运营商退款率（前10）", "Bar (H)", "Operators with worst refund rates (≥200).", "退款率最高的运营商（≥200单）。"),
+    ]),
+    ("🌍", "Market Intelligence", "市场洞察", [
+        ("🗺️ Global Revenue Distribution", "🗺️ 全球收入分布", "Choropleth map", "Revenue intensity by country worldwide.", "全球各国营业额强度。"),
+        ("🚀 Risers vs 📉 Decliners", "🚀 增长 vs 📉 下滑", "Table", "Fastest-growing/declining markets.", "增长/下滑最快的市场。"),
+        ("🌍 Top Markets by Revenue/Orders/客单价", "🌍 市场排名 收入/订单/客单价", "Bars (H)", "Market rankings on each dimension.", "各维度市场排名。"),
+        ("💎 Market Opportunity Matrix", "💎 市场机会矩阵", "Bubble scatter", "Volume × 客单价 × GMV — where to invest.", "订单量 × 客单价 × 营业额 — 投资方向。"),
+        ("🧭 Market Expansion Radar", "🧭 市场拓展雷达", "Quadrant scatter", "Core/Upsell/Growth/Long-tail.", "核心/增购/增长/长尾 分类。"),
+        ("📅 Monthly Revenue Heatmap (Top 15)", "📅 月度收入热力图（前15）", "Heatmap", "Seasonality & momentum per market.", "各市场季节性与势头。"),
+        ("📊 Orders by Market × Segment", "📊 各市场×分部订单", "Stacked bar", "B2B/B2C mix per top market.", "各市场 B2B/B2C 结构。"),
+        ("📋 Market KPI Scorecard", "📋 市场指标评分卡", "Table (Excel)", "Full per-market KPI export.", "各市场完整指标导出。"),
+        ("💲 Recharge Destinations / Beneficiary Reach", "💲 充值目的地 / 受益号触达", "Bars", "Cross-border recharge & reseller signals.", "跨境充值与分销信号。"),
+    ]),
+    ("⚙️", "Operational Intelligence", "运营智能", [
+        ("📊 Operational KPIs", "📊 运营核心指标", "KPI cards", "Avg daily revenue/orders, peak day/hour.", "日均收入/订单、高峰日/时段。"),
+        ("📈 Revenue Velocity", "📈 收入速度", "Bar + line", "Daily orders vs revenue.", "每日订单 vs 收入。"),
+        ("📉 Day-over-Day Revenue Change", "📉 日环比收入变化", "Colored bars", "Daily % swings (green up/red down).", "每日涨跌幅（绿涨红跌）。"),
+        ("📅 Activity Heatmap (Weekday × Hour)", "📅 活跃度热力图（星期×小时）", "Heatmap", "When orders happen — staffing/promo timing.", "下单时段 — 排班/促销时机。"),
+    ]),
+    ("🤝", "Supplier & Operator Performance", "供应商绩效", [
+        ("🤝 Operator Snapshot", "🤝 运营商快照", "KPI cards", "GMV/orders/客单价/margin/Top-3 conc.", "营业额/订单/客单价/毛利/前3集中度。"),
+        ("⚠️ Supplier Concentration Risk", "⚠️ 供应商集中度风险", "KPI flag", "Top-3 operator share (🔴 if >80%).", "前3运营商占比（>80% 标红）。"),
+        ("💰 Gross Margin by Operator / 📈 Margin % Trend", "💰 各运营商毛利 / 📈 毛利率趋势", "Bar & lines", "Absolute & rate margin per operator.", "各运营商毛利额与毛利率。"),
+        ("🥧 Revenue Pareto", "🥧 收入帕累托", "Bar + cum. line", "How few operators drive most revenue.", "少数运营商贡献大部分收入。"),
+        ("🚀 Top Operators by Revenue / Orders", "🚀 运营商排名 收入/订单", "Bars", "Operator rankings & momentum.", "运营商排名与势头。"),
+        ("📋 Operator Scorecard", "📋 运营商评分卡", "Table (Excel)", "Full per-operator KPIs.", "各运营商完整指标。"),
+        ("💹 Gross Margin by Product Category", "💹 各产品类别毛利", "Bar", "Which categories are most profitable.", "哪些类别最赚钱。"),
+        ("🩺 Fulfillment / ⚠ Missing Supplier Order ID", "🩺 履约 / ⚠ 缺接口商订单号", "KPI + bar", "Routing coverage & reconciliation risk.", "路由覆盖率与对账风险。"),
+        ("💱 Settlement Currency Audit", "💱 结算币种审计", "Table (Excel)", "Per-market settlement currency & margin.", "各市场结算币种与毛利核查。"),
+        ("🇮🇶 Iraq Pinstore Purchase Planner", "🇮🇶 伊拉克 Pinstore 采购计划", "KPI + heatmap + table", "Weekly PIN demand & stock-purchase estimation (Pinstore supplier).", "每周PIN需求与备货采购估算（Pinstore 供应商）。"),
+    ]),
+    ("🏷️", "Product & Denomination Analysis", "产品与面值", [
+        ("🏷️ Category + 🏢 Operator filters", "🏷️ 类别 + 🏢 运营商筛选", "Controls", "Scope the tab by category & operator (all or pick).", "按类别与运营商筛选本页（全部或指定）。"),
+        ("🗂️ Category KPIs / Revenue & Orders / Trend", "🗂️ 类别指标 / 收入订单 / 趋势", "KPI + bar/line", "Which line drives revenue vs traffic.", "哪条产品线带收入/带流量。"),
+        ("🌳 Product Revenue Mix", "🌳 产品收入结构", "Treemap", "Portfolio concentration by product.", "产品组合集中度。"),
+        ("📦 Top Products / by Segment / Top-5 trend", "📦 产品排名 / 分部 / 前5趋势", "Bars & lines", "Best sellers & their trajectories.", "畅销品及其走势。"),
+        ("💵 Denomination Band Contribution", "💵 面值档位贡献", "Bar", "Low/Mid/High face-value share of GMV.", "低/中/高面值的营业额占比。"),
+        ("📶 Data Package by Volume / Tier / Operator×Size", "📶 流量套餐 规格/档位/运营商×规格", "Bars & matrix", "买流量: which data sizes sell, per operator.", "买流量：各规格销量，按运营商。"),
+        ("💵 Airtime by Denomination / × Operator", "💵 话费 各面值 / ×运营商", "Bars", "充话费: which top-up values sell.", "充话费：各面值销量。"),
+        ("⏰ Peak Hours / Denomination × Operator", "⏰ 高峰时段 / 面值×运营商", "Heatmaps", "When & what denominations are bought.", "何时购买、买什么面值。"),
+        ("📋 Denomination & Product scorecards", "📋 面值与产品评分卡", "Tables (Excel)", "Full denomination/product KPIs.", "面值/产品完整指标。"),
+        ("📊 Operator × Category mix", "📊 运营商×类别结构", "Stacked bars + pivot", "Each operator's product spread.", "各运营商的产品分布。"),
+    ]),
+    ("👥", "Customer Analytics", "客户分析", [
+        ("🏢 B2B Agent Snapshot / Top 20 / Table", "🏢 B2B代理快照 / 前20 / 表", "KPI, bar, table", "Agent revenue concentration & ranking.", "代理商收入集中度与排名。"),
+        ("👥 Customer KPIs (B2C)", "👥 客户核心指标 (B2C)", "KPI cards", "Active customers, 复购率, 留存率, ARPU (standard).", "活跃客户、复购率、留存率、ARPU（标准口径）。"),
+        ("⚠️ Churn Risk Buckets", "⚠️ 流失风险分层", "KPI cards", "Active / at-risk / lapsed & revenue at risk.", "活跃/有风险/流失 及风险收入。"),
+        ("⏱️ Registration → First Purchase Funnel", "⏱️ 注册→首购漏斗", "Funnel", "Activation speed of new customers.", "新客激活速度。"),
+        ("🌐 IP Geographic Origin (B2C)", "🌐 IP来源地分析 (B2C)", "Badge + bar", "Country–IP mismatch signal (world map removed).", "下单国与IP国错配信号（地图已移除）。"),
+        ("🔄 New vs Returning (新客/老客)", "🔄 新客 vs 老客", "Donut / bar", "新客=注册月==订单月; 老客=注册月<订单月.", "新客=注册月==订单月；老客=注册月<订单月。"),
+        ("🔗 Channel Performance (会员来源)", "🔗 渠道来源绩效（会员来源）", "Bar (H)", "Revenue per normalized channel (用户列表 join).", "按统一渠道（会员来源）的营业额（用户列表关联）。"),
+        ("📈 Monthly Acquisition / 📊 Channel Analysis", "📈 月度获客 / 📊 渠道来源分析", "Bars", "New-customer intake & acquisition channels.", "新客获取量与获客渠道。"),
+        ("📚 Cohort Retention & CLV", "📚 批次留存与CLV", "Heatmap", "Retention/LTV by acquisition month (complementary).", "按获客月的留存/LTV（补充视角）。"),
+        ("📊 Order Frequency / Orders per Customer", "📊 下单频次 / 客均订单", "Bars", "Purchase-frequency distribution.", "购买频次分布。"),
+    ]),
+    ("🎟️", "Marketing & Promotions", "营销与促销", [
+        ("🎟️ Promotion KPIs", "🎟️ 促销核心指标", "KPI cards", "Coupon spend, coupon-order revenue, ROI, usage.", "券支出、券单收入、ROI、使用量。"),
+        ("📈 Coupon Spend vs Revenue", "📈 券支出 vs 收入", "Bar + line", "Monthly promo cost vs return.", "月度促销成本 vs 回报。"),
+        ("🏷️ Campaign Performance", "🏷️ 活动绩效", "Table (Excel)", "Per-coupon orders, spend, ROI, repeat.", "各券 订单/支出/ROI/复购。"),
+        ("⚖️ Coupon vs Non-Coupon Customers", "⚖️ 用券 vs 未用券客户", "Grouped bar", "Build loyalty or just discount?", "用券是建立忠诚还是单纯打折？"),
+        ("🆕 New-User Promo Orders", "🆕 新人优惠订单", "Bar", "New-user promo volume by month.", "新人优惠订单月度量。"),
+        ("⭐ Featured (Badge) Product Performance", "⭐ 角标产品表现", "Grouped bar", "Lift from badging products.", "角标对产品的提升。"),
+    ]),
+    ("⏱", "Sales Explorer", "时段销售查询", [
+        ("🔎 Ad-hoc filters", "🔎 自定义筛选", "Controls", "Region/country/segment/status/date/time/weekday/product/operator/denom.", "地区/国家/分部/状态/日期/时段/星期/产品/运营商/面值。"),
+        ("📊 Window KPIs", "📊 时段核心指标", "KPI cards", "Headline metrics for the slice vs prior.", "所选时段指标 vs 上期。"),
+        ("🕐 Orders & Revenue by Hour", "🕐 分时订单与收入", "Bar + line", "Intraday pattern, selected band shaded.", "日内规律，选定时段高亮。"),
+        ("📈 Daily Trend", "📈 每日趋势", "Line", "Orders & revenue across the range.", "区间内订单与收入。"),
+        ("📋 Breakdown pivot", "📋 透视拆分", "Table (Excel/CSV)", "Group by operator/product/denom/country/day/hour.", "按 运营商/产品/面值/国家/日/小时 透视。"),
+    ]),
+    ("🤖", "AI Predictions", "AI预测", [
+        ("📈 Revenue Forecast", "📈 收入预测", "Line + band", "4/8/12-week forecast with confidence & MAPE.", "4/8/12周预测，含置信区间与MAPE。"),
+        ("🔮 Churn Prediction", "🔮 流失预测", "Feature bar + table", "Churn drivers + top at-risk customers.", "流失驱动因素 + 高风险客户。"),
+        ("📦 Product Demand Forecast", "📦 产品需求预测", "Table", "Weekly order forecast per operator × category.", "各运营商×类别 周订单预测。"),
+    ]),
+    ("📖", "Guideline", "使用指南", [
+        ("📖 Guideline (this tab)", "📖 使用指南（本页）", "Reference", "Catalogue of every visualization + terminology + removals.", "全部可视化目录 + 术语表 + 移除清单。"),
+    ]),
+]
+
+_GUIDELINE_TERMS = [
+    ("Revenue / GMV", "营业额 (GMV)", "Total paid amount (turnover)."),
+    ("Old-customer revenue", "老客营业额", "GMV from returning customers."),
+    ("New-customer revenue", "新客营业额", "GMV from first-time customers."),
+    ("Successful orders", "成单数", "Count of successful orders."),
+    ("Successful users", "成单人数", "Distinct customers with a successful order."),
+    ("Success rate", "成单率", "Successful ÷ total orders."),
+    ("AOV", "客单价", "Revenue ÷ orders."),
+    ("Repurchase rate", "复购率", "|上月成功用户 ∩ 本月成功用户| / |本月成功用户|."),
+    ("Retention rate", "留存率", "|上月新客成功 ∩ 本月成功| / |上月新客成功|."),
+    ("New customers", "新客数", "DISTINCT 用户ID, 注册时间 ∈ period (from 用户列表)."),
+    ("Conversion rate", "转化率", "|期内新客 ∩ 期内成功订单用户| / |期内新客|."),
+    ("Returning / New", "老客 / 新客", "新客 = 注册月 == 订单月; 老客 = 注册月 < 订单月 (B2C)."),
+    ("Airtime / Data", "充话费 / 买流量", "Two main product lines (话费 / 流量 in axes)."),
+    ("Channel / source", "渠道来源 (来源汇总)", "Acquisition / payment channel."),
+    ("Summary / Key countries / Global", "汇总 / 重点国家 / 全球", "Country grouping levels."),
+]
+
+_GUIDELINE_REMOVALS = [
+    ("✅ Removed", "IP world choropleth — 'Global IP Origin Distribution (B2C)'", "Customer Analytics",
+     "Low decision value vs visual weight. The country–IP mismatch badge + Top-15 IP-countries bar are kept (useful fraud / VPN signal)."),
+    ("✅ Kept (moved)", "Iraq Pinstore weekly modules", "Supplier & Operator Performance",
+     "Needed for estimation — relocated from Operational Intelligence to the Supplier & Operator Performance tab."),
+    ("🟡 Candidate", "Redundant Top-N revenue/orders variants", "several tabs",
+     "Some markets/operators are ranked 2–3 ways. Consolidate after review."),
+]
+
+
+def _guideline_children():
+    """Build the static 'Guideline' tab: per-tab visualization catalogue,
+    terminology quick-reference (bitsbang ↔ dashboard) and proposed removals."""
+    def _esc(s):
+        return (str(s).replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;"))
+
+    cards = [ui.HTML(
+        '<div class="chart-container" style="margin-bottom:18px;">'
+        '<h2 style="margin:0 0 6px;">📖 <span class="lang-en">Dashboard Guideline</span>'
+        '<span class="lang-zh">仪表盘使用指南</span></h2>'
+        '<p style="color:#475569;margin:0;font-size:0.92em;">'
+        '<span class="lang-en">Every visualization in this dashboard, grouped by tab — what it is and the '
+        'business question it answers — plus a China-team terminology reference and the proposed-removals list.</span>'
+        '<span class="lang-zh">本仪表盘所有可视化（按标签页分组）：图表类型与它回答的业务问题；'
+        '另含与中国团队对齐的术语表和拟移除清单。</span></p></div>'
+    )]
+
+    def _bi(en_text, zh_text):
+        return (f'<span class="lang-en">{_esc(en_text)}</span>'
+                f'<span class="lang-zh">{_esc(zh_text)}</span>')
+
+    for icon, en, zh, rows in _GUIDELINE_TABS:
+        body = "".join(
+            f'<tr style="border-bottom:1px solid #F1F5F9;">'
+            f'<td style="padding:6px 10px;font-weight:600;color:#0F172A;">{_bi(t_en, t_zh)}</td>'
+            f'<td style="padding:6px 10px;color:#5B6CFF;white-space:nowrap;">{_bi(ty, _GTYPE_ZH.get(ty, ty))}</td>'
+            f'<td style="padding:6px 10px;color:#475569;">{_bi(u_en, u_zh)}</td></tr>'
+            for (t_en, t_zh, ty, u_en, u_zh) in rows
+        )
+        cards.append(ui.HTML(
+            f'<div class="chart-container" style="margin-bottom:14px;">'
+            f'<h3 style="margin:0 0 8px;">{icon} '
+            f'<span class="lang-en">{_esc(en)}</span><span class="lang-zh">{_esc(zh)}</span></h3>'
+            f'<table style="width:100%;border-collapse:collapse;font-size:0.85em;">'
+            f'<thead><tr style="text-align:left;border-bottom:2px solid #E2E8F0;color:#64748B;">'
+            f'<th style="padding:6px 10px;">{_bi("Visualization", "可视化")}</th>'
+            f'<th style="padding:6px 10px;">{_bi("Type", "类型")}</th>'
+            f'<th style="padding:6px 10px;">{_bi("What it shows / question it answers", "用途 / 回答的问题")}</th></tr></thead>'
+            f'<tbody>{body}</tbody></table></div>'
+        ))
+
+    term_rows = "".join(
+        f'<tr style="border-bottom:1px solid #F1F5F9;">'
+        f'<td style="padding:6px 10px;color:#475569;">{_esc(en)}</td>'
+        f'<td style="padding:6px 10px;font-weight:700;color:#5B6CFF;white-space:nowrap;">{_esc(zh)}</td>'
+        f'<td style="padding:6px 10px;color:#475569;">{_esc(desc)}</td></tr>'
+        for (en, zh, desc) in _GUIDELINE_TERMS
+    )
+    cards.append(ui.HTML(
+        '<div class="chart-container" style="margin-bottom:14px;">'
+        '<h3 style="margin:0 0 8px;">🈯 <span class="lang-en">Terminology — bitsbang (China team) ↔ dashboard</span>'
+        '<span class="lang-zh">术语对照 — 中国团队（bitsbang）↔ 仪表盘</span></h3>'
+        '<table style="width:100%;border-collapse:collapse;font-size:0.85em;">'
+        '<thead><tr style="text-align:left;border-bottom:2px solid #E2E8F0;color:#64748B;">'
+        '<th style="padding:6px 10px;">Metric / concept</th><th style="padding:6px 10px;">术语 (adopted)</th>'
+        '<th style="padding:6px 10px;">Definition</th></tr></thead>'
+        f'<tbody>{term_rows}</tbody></table></div>'
+    ))
+
+    rem_rows = "".join(
+        f'<tr style="border-bottom:1px solid #F1F5F9;">'
+        f'<td style="padding:6px 10px;white-space:nowrap;font-weight:600;">{_esc(status)}</td>'
+        f'<td style="padding:6px 10px;color:#0F172A;">{_esc(item)}</td>'
+        f'<td style="padding:6px 10px;color:#94A3B8;white-space:nowrap;">{_esc(where)}</td>'
+        f'<td style="padding:6px 10px;color:#475569;">{_esc(why)}</td></tr>'
+        for (status, item, where, why) in _GUIDELINE_REMOVALS
+    )
+    cards.append(ui.HTML(
+        '<div class="chart-container" style="margin-bottom:14px;">'
+        '<h3 style="margin:0 0 8px;">🗑️ <span class="lang-en">Proposed removals (awaiting sign-off)</span>'
+        '<span class="lang-zh">拟移除清单（待确认）</span></h3>'
+        '<table style="width:100%;border-collapse:collapse;font-size:0.85em;">'
+        '<thead><tr style="text-align:left;border-bottom:2px solid #E2E8F0;color:#64748B;">'
+        '<th style="padding:6px 10px;">Status</th><th style="padding:6px 10px;">Item</th>'
+        '<th style="padding:6px 10px;">Where</th><th style="padding:6px 10px;">Rationale</th></tr></thead>'
+        f'<tbody>{rem_rows}</tbody></table></div>'
+    ))
+    return cards
 
 
 def _remarks_accordion(tab_id: str):
@@ -1586,9 +2026,36 @@ app_ui = ui.page_sidebar(
             class_="main-header"
         ),
         ui.output_ui("staleness_banner"),
+        ui.HTML(
+            '<div style="background:#FFF7ED;border:1px solid #FED7AA;color:#9A3412;'
+            'padding:8px 14px;border-radius:8px;margin:6px 0 4px;font-size:0.82em;line-height:1.5;">'
+            'ℹ️ <b>China-team 基准 (全球共用计算取数公式及标准)</b>：核心指标默认<b>剔除「电子钱包 / Touch\'n Go」</b>'
+            '（约占 GMV 22%），以 <b>充值成功</b> 为口径；<b>汇总 / 全球</b> 视图剔除马来西亚。 '
+            '<span style="opacity:.8;">Core metrics exclude e-wallet &amp; Touch\'n Go (≈22% of GMV) on the 充值成功 basis; '
+            'Summary/Global views exclude Malaysia.</span></div>'
+        ),
         ui.navset_tab(
             ui.nav_panel(
                 _bnav("Executive Overview", "执行概览"),
+                ui.div(
+                    _bh3("🧭 Operating Summary", "🧭 运营概览",
+                         _help("Bitsbang-style operating KPIs on the successful-order (充值成功) basis, with "
+                               "month-over-month vs the prior equal period. Cards showing '—' await the China-team "
+                               "formulas for 复购率 / 留存率 and the 新客/老客 split (老客·新客营业额, 新客数, 转化率).")),
+                    _bp("China-team operating view — 营业额, 成单数/成单人数, 成单率, 客单价 and customer metrics on the 充值成功 basis.",
+                        "中国团队运营视角 — 以「充值成功」为口径的营业额、成单数/成单人数、成单率、客单价及客户指标。"),
+                    ui.output_ui("operating_overview_kpis"),
+                    class_="chart-container"
+                ),
+                ui.div(
+                    _bh3("💎 Net Contribution", "💎 净贡献",
+                         _help("Net Contribution = successful GMV − COGS (结算价 converted to RMB) − coupon spend. "
+                               "已退款 GMV is shown separately and excluded. True bottom-line per the selected filters.")),
+                    _bp("The true bottom line: successful GMV minus supplier cost (COGS) minus coupon spend.",
+                        "真实利润口径：成功GMV 减去供应商成本（COGS）再减去优惠券支出。"),
+                    ui.output_ui("net_contribution_kpi"),
+                    class_="chart-container"
+                ),
                 ui.div(
                     _bh3("🚨 Anomaly Detection & Alerts", "🚨 异常检测与预警",
                          _help("Cards are generated by comparing the last 7 days vs the prior 4-week baseline.")),
@@ -1632,6 +2099,15 @@ app_ui = ui.page_sidebar(
                     _bp("Quick-glance ranking of your highest-value markets.",
                         "高价值市场排名速览，完整排名请查看「市场洞察」页。"),
                     ui.output_ui("overview_top5_countries"),
+                    class_="chart-container"
+                ),
+                ui.div(
+                    _bh3("🌏 Key Countries — Last 3 Months Revenue", "🌏 重点国家 — 近3个月营业额",
+                         _help("Grouped bars: GMV (充值成功) for each key country over the latest 3 months, "
+                               "independent of the country filter. Edit the key-country list in the sidebar.")),
+                    _bp("Momentum of your priority markets over the last three months (充值成功 basis).",
+                        "重点市场近3个月的营业额走势（充值成功口径），不受国家筛选影响。"),
+                    ui.output_ui("key_country_3m_trend"),
                     class_="chart-container"
                 ),
                 ui.div(
@@ -1708,7 +2184,7 @@ app_ui = ui.page_sidebar(
                 ui.div(
                     _bh3("📊 Revenue & Orders KPIs", "📊 收入与订单核心指标"),
                     _bp("Key performance indicators for the selected period. GMV = Gross Merchandise Value.",
-                        "所选周期核心绩效指标。GMV = 商品交易总额。AOV = 平均订单价值。"),
+                        "所选周期核心绩效指标。GMV = 商品交易总额。AOV = 客单价。"),
                     ui.output_ui("revenue_orders_kpis"),
                     class_="chart-container"
                 ),
@@ -1727,7 +2203,7 @@ app_ui = ui.page_sidebar(
                     class_="chart-container"
                 ),
                 ui.div(
-                    _bh3("💎 Average Order Value (AOV) by Customer Segment", "💎 各客户分类平均订单价值 (AOV)",
+                    _bh3("💎 Average Order Value (AOV) by Customer Segment", "💎 各客户分类客单价 (AOV)",
                          _help("AOV = Total Revenue ÷ Total Orders for each segment.")),
                     _bp("Higher AOV signals stronger per-transaction value; guide pricing strategy and promotions.",
                         "高 AOV 代表每笔交易价值更强，用于指导定价策略和分部促销活动。"),
@@ -1848,7 +2324,7 @@ app_ui = ui.page_sidebar(
                     class_="chart-container"
                 ),
                 ui.div(
-                    _bh3("💎 Average Order Value (AOV) by Market", "💎 各市场平均订单价值 (AOV)",
+                    _bh3("💎 Average Order Value (AOV) by Market", "💎 各市场客单价 (AOV)",
                          _help("AOV = Revenue ÷ Orders per market.")),
                     _bp("Markets sorted by AOV. Pair with order volume to identify upsell vs. penetration opportunities.",
                         "按 AOV 降序排列。结合订单量可识别增值销售与市场渗透机会。"),
@@ -1990,72 +2466,6 @@ app_ui = ui.page_sidebar(
                         "识别高峰交易时段及低活跃窗口，用于安排促销活动和系统维护。"),
                     ui.output_ui("weekday_sales_chart"),
                     class_="chart-container"
-                ),
-                ui.tags.hr(style="border-color:rgba(91,108,255,0.25); margin:24px 0 16px;"),
-                ui.div(
-                    _bh3("🇮🇶 Iraq Pinstore — Weekly Purchase Planner", "🇮🇶 伊拉克 Pinstore — 周采购计划",
-                         _help("Covers AsiaCell PIN, Zain PIN, Korek PIN orders from Iraq. "
-                               "B2C (Master): product name ends with 'PIN'. "
-                               "B2B (Agent): product_info ends with 'PIN'. "
-                               "Supplier: Pinstore (manual weekly purchase). Iraq has two suppliers: DT & Pinstore.")),
-                    _bp("Estimate how many PINs to purchase this week and this month based on historical order trends.",
-                        "根据历史订单趋势估算本周及本月需要向 Pinstore 采购的PIN数量。"),
-                    ui.output_ui("iraq_pinstore_kpis"),
-                    class_="chart-container"
-                ),
-                ui.div(
-                    _bh3("📊 Iraq PIN Weekly Order Trend (Last 12 Weeks)", "📊 伊拉克PIN订单周趋势（近12周）",
-                         _help("Weekly order volume per PIN SKU. Red dashed line = 4-week rolling average total.")),
-                    _bp("Track each PIN SKU's weekly demand. Seasonal spikes indicate upcoming high-demand periods.",
-                        "追踪每个PIN SKU的每周需求量，季节性峰值提示即将到来的高需求期。"),
-                    ui.output_ui("iraq_pinstore_trend_chart"),
-                    class_="chart-container"
-                ),
-                ui.div(
-                    _bh3("🔥 Iraq Pinstore — Denomination × Operator Heatmap", "🔥 伊拉克 Pinstore — 面值 × 运营商热力图",
-                         _help("Weekly order volume per operator × denomination combination (last 12 weeks). "
-                               "Dark cells = high demand. Use to spot which denominations drive the most volume per operator.")),
-                    _bp("Identify hot denominations per operator to prioritise purchase allocation.",
-                        "识别每个运营商的热门面值，优先安排采购资金。"),
-                    ui.output_ui("iraq_pinstore_denom_heatmap"),
-                    class_="chart-container"
-                ),
-                ui.div(
-                    _bh3("🛒 Iraq Pinstore — Stock Purchase Planner", "🛒 伊拉克 Pinstore — 备货采购计划",
-                         _help("Pieces to buy per operator × denomination for the chosen stock horizon. "
-                               "Pieces = recent daily velocity (last 28 days) × days × 1.10 safety buffer, "
-                               "rounded up. Pick 1 or 2 weeks, or enter a custom number of days.")),
-                    _bp("Pick how many days of stock you want to hold and read the pieces to purchase per "
-                        "denomination per operator. Buffer: +10%. Detailed weekly/monthly estimates remain in the Excel download.",
-                        "选择备货天数，直接读取每个运营商每个面值需采购的张数。安全缓冲+10%。详细的周/月估算仍可在Excel中下载。"),
-                    ui.div(
-                        ui.div(
-                            ui.input_radio_buttons(
-                                "pinstore_horizon", None,
-                                choices={"7": "📅 1 Week (7d)", "14": "📅 2 Weeks (14d)",
-                                         "custom": "✏️ Custom"},
-                                selected="7", inline=True),
-                            ui.panel_conditional(
-                                "input.pinstore_horizon === 'custom'",
-                                ui.input_numeric("pinstore_days", "Days of stock:",
-                                                 value=10, min=1, max=60, width="160px"),
-                            ),
-                            style="display:flex; gap:16px; align-items:center; flex-wrap:wrap;"
-                        ),
-                        ui.download_button(
-                            "download_iraq_pinstore_plan",
-                            "⬇ Detailed Plan (Excel)",
-                            class_="refresh-btn",
-                            style=("background:#5B6CFF!important; color:white!important; "
-                                   "border:none!important; padding:6px 14px!important; "
-                                   "font-size:0.85em!important; width:auto!important;")
-                        ),
-                        style="display:flex; justify-content:space-between; align-items:center; "
-                              "margin-bottom:8px; flex-wrap:wrap; gap:10px;"
-                    ),
-                    ui.output_ui("pinstore_budget_note"),
-                    ui.output_data_frame("pinstore_purchase_matrix"),
-                    class_="data-table"
                 ),
                 _remarks_accordion("operational_intelligence"),
             ),
@@ -2202,6 +2612,87 @@ app_ui = ui.page_sidebar(
                     ui.output_data_frame("settlement_audit_table"),
                     class_="data-table"
                 ),
+                ui.tags.hr(style="border-color:rgba(91,108,255,0.25); margin:24px 0 16px;"),
+                ui.HTML(
+                    '<div style="display:flex;align-items:center;gap:12px;'
+                    'background:linear-gradient(90deg,rgba(79,70,229,0.10),transparent);'
+                    'border-left:4px solid #4F46E5;border-radius:0 8px 8px 0;'
+                    'padding:12px 18px;margin:4px 0 14px;">'
+                    '<span style="font-size:1.5em;">🇮🇶</span>'
+                    '<div>'
+                    '<div class="lang-en" style="font-weight:700;font-size:1.08em;color:#1E293B;">'
+                    'Iraq Pinstore — Supplier Purchase Planning</div>'
+                    '<div class="lang-zh" style="font-weight:700;font-size:1.08em;color:#1E293B;">'
+                    '伊拉克 Pinstore — 供应商采购计划</div>'
+                    '<div style="font-size:0.8em;color:#64748B;margin-top:2px;">'
+                    'Weekly PIN demand &amp; stock-purchase estimation for the Pinstore supplier (Iraq).</div>'
+                    '</div></div>'
+                ),
+                ui.div(
+                    _bh3("🇮🇶 Iraq Pinstore — Weekly Purchase Planner", "🇮🇶 伊拉克 Pinstore — 周采购计划",
+                         _help("Covers AsiaCell PIN, Zain PIN, Korek PIN orders from Iraq. "
+                               "B2C (Master): product name ends with 'PIN'. "
+                               "B2B (Agent): product_info ends with 'PIN'. "
+                               "Supplier: Pinstore (manual weekly purchase). Iraq has two suppliers: DT & Pinstore.")),
+                    _bp("Estimate how many PINs to purchase this week and this month based on historical order trends.",
+                        "根据历史订单趋势估算本周及本月需要向 Pinstore 采购的PIN数量。"),
+                    ui.output_ui("iraq_pinstore_kpis"),
+                    class_="chart-container"
+                ),
+                ui.div(
+                    _bh3("📊 Iraq PIN Weekly Order Trend (Last 12 Weeks)", "📊 伊拉克PIN订单周趋势（近12周）",
+                         _help("Weekly order volume per PIN SKU. Red dashed line = 4-week rolling average total.")),
+                    _bp("Track each PIN SKU's weekly demand. Seasonal spikes indicate upcoming high-demand periods.",
+                        "追踪每个PIN SKU的每周需求量，季节性峰值提示即将到来的高需求期。"),
+                    ui.output_ui("iraq_pinstore_trend_chart"),
+                    class_="chart-container"
+                ),
+                ui.div(
+                    _bh3("🔥 Iraq Pinstore — Denomination × Operator Heatmap", "🔥 伊拉克 Pinstore — 面值 × 运营商热力图",
+                         _help("Weekly order volume per operator × denomination combination (last 12 weeks). "
+                               "Dark cells = high demand. Use to spot which denominations drive the most volume per operator.")),
+                    _bp("Identify hot denominations per operator to prioritise purchase allocation.",
+                        "识别每个运营商的热门面值，优先安排采购资金。"),
+                    ui.output_ui("iraq_pinstore_denom_heatmap"),
+                    class_="chart-container"
+                ),
+                ui.div(
+                    _bh3("🛒 Iraq Pinstore — Stock Purchase Planner", "🛒 伊拉克 Pinstore — 备货采购计划",
+                         _help("Pieces to buy per operator × denomination for the chosen stock horizon. "
+                               "Pieces = recent daily velocity (last 28 days) × days × 1.10 safety buffer, "
+                               "rounded up. Pick 1 or 2 weeks, or enter a custom number of days.")),
+                    _bp("Pick how many days of stock you want to hold and read the pieces to purchase per "
+                        "denomination per operator. Buffer: +10%. Detailed weekly/monthly estimates remain in the Excel download.",
+                        "选择备货天数，直接读取每个运营商每个面值需采购的张数。安全缓冲+10%。详细的周/月估算仍可在Excel中下载。"),
+                    ui.div(
+                        ui.div(
+                            ui.input_radio_buttons(
+                                "pinstore_horizon", None,
+                                choices={"7": "📅 1 Week (7d)", "14": "📅 2 Weeks (14d)",
+                                         "custom": "✏️ Custom"},
+                                selected="7", inline=True),
+                            ui.panel_conditional(
+                                "input.pinstore_horizon === 'custom'",
+                                ui.input_numeric("pinstore_days", "Days of stock:",
+                                                 value=10, min=1, max=60, width="160px"),
+                            ),
+                            style="display:flex; gap:16px; align-items:center; flex-wrap:wrap;"
+                        ),
+                        ui.download_button(
+                            "download_iraq_pinstore_plan",
+                            "⬇ Detailed Plan (Excel)",
+                            class_="refresh-btn",
+                            style=("background:#5B6CFF!important; color:white!important; "
+                                   "border:none!important; padding:6px 14px!important; "
+                                   "font-size:0.85em!important; width:auto!important;")
+                        ),
+                        style="display:flex; justify-content:space-between; align-items:center; "
+                              "margin-bottom:8px; flex-wrap:wrap; gap:10px;"
+                    ),
+                    ui.output_ui("pinstore_budget_note"),
+                    ui.output_data_frame("pinstore_purchase_matrix"),
+                    class_="data-table"
+                ),
                 _remarks_accordion("supplier_operator_performance"),
             ),
             ui.nav_panel(
@@ -2217,6 +2708,21 @@ app_ui = ui.page_sidebar(
                         ui.tags.small(
                             ui.tags.span("Filter all product charts on this page by product category.", class_="lang-en"),
                             ui.tags.span("按产品类别筛选本页所有图表。", class_="lang-zh"),
+                            style="color:#64748B; font-size:0.8em;"
+                        ),
+                        style=("background:#EEF0FF; border:1px solid #C7D2FE; border-radius:10px; "
+                               "padding:12px 16px; margin-bottom:12px;")
+                    ),
+                    ui.div(
+                        ui.tags.span(
+                            ui.tags.span("🏢 Operator Filter", class_="lang-en"),
+                            ui.tags.span("🏢 运营商筛选", class_="lang-zh"),
+                            style="font-weight:600; color:#5B6CFF; font-size:0.95em;"
+                        ),
+                        ui.output_ui("product_operator_filter_ui"),
+                        ui.tags.small(
+                            ui.tags.span("Leave empty to view all operators, or pick one/several to scope every chart on this page.", class_="lang-en"),
+                            ui.tags.span("留空查看全部运营商，或选择一个/多个，以筛选本页所有图表。", class_="lang-zh"),
                             style="color:#64748B; font-size:0.8em;"
                         ),
                         style=("background:#EEF0FF; border:1px solid #C7D2FE; border-radius:10px; "
@@ -2651,7 +3157,7 @@ app_ui = ui.page_sidebar(
                     class_="chart-container"
                 ),
                 ui.div(
-                    _bh3("🔄 New vs. Returning Customers (B2C)", "🔄 新客户 vs 回购客户（B2C）",
+                    _bh3("🔄 New vs. Returning Customers (B2C)", "🔄 新客 vs 老客（B2C）",
                          _help("New customers = first-ever order in the selected period. "
                                "Returning customers = had at least one prior order. "
                                "A healthy business typically sees >50% returning customers.")),
@@ -2670,13 +3176,31 @@ app_ui = ui.page_sidebar(
                     class_="chart-container"
                 ),
                 ui.div(
-                    _bh3("📊 User Source Analysis (B2C)", "📊 用户来源分析（B2C）",
+                    _bh3("📊 User Source Analysis (B2C)", "📊 渠道来源分析（B2C）",
                          _help("Breakdown of B2C customers by their acquisition source (用户来源). "
                                "Identify which channels bring the most customers and highest-value buyers.")),
                     _bp("Understand which acquisition channels (user source) drive volume vs. value for B2C customers.",
                         "了解哪些获客渠道（用户来源）为B2C客户带来量和价值的差异。"),
                     ui.output_ui("user_source_chart"),
                     class_="chart-container"
+                ),
+                ui.div(
+                    _bh3("🔗 Channel Performance (会员来源) — B2C", "🔗 渠道来源绩效（会员来源）— B2C",
+                         _help("Normalized channel (会员来源) from the 用户列表, joined to orders by user — "
+                               "the standard 渠道来源 dimension. Revenue per acquisition channel.")),
+                    _bp("Revenue by normalized acquisition channel (会员来源) — the China-team 渠道来源 mapping.",
+                        "按统一后的获客渠道（会员来源）划分的营业额 — 标准「渠道来源」口径。"),
+                    ui.output_ui("channel_analysis_chart"),
+                    class_="chart-container"
+                ),
+                ui.div(
+                    _bh3("📋 Channel ROI Scorecard (会员来源)", "📋 渠道来源 ROI 评分卡",
+                         _help("Per channel: GMV, orders, customers, new customers, coupon spend, "
+                               "ROI (GMV ÷ coupon spend) and CAC (coupon spend ÷ new customers). B2C only.")),
+                    _bp("Which acquisition channel returns the most per coupon-yuan spent (ROI), and what each new customer costs (CAC).",
+                        "哪个获客渠道每投入1元优惠券带来的回报最高（ROI），以及每个新客的获取成本（CAC）。"),
+                    ui.output_data_frame("channel_scorecard"),
+                    class_="data-table"
                 ),
                 ui.div(
                     _bh3("📚 Customer Retention & CLV by Acquisition Cohort (B2C)", "📚 获客批次留存率与CLV（B2C）",
@@ -3028,6 +3552,10 @@ app_ui = ui.page_sidebar(
                     class_="data-table"
                 ),
             ),
+            ui.nav_panel(
+                _bnav("📖 Guideline", "📖 使用指南"),
+                *_guideline_children(),
+            ),
         ),
         style="padding: 20px;"
     )
@@ -3265,6 +3793,34 @@ def server(input, output, session):
             ),
         )
 
+    @render.ui
+    @safe_render
+    def product_operator_filter_ui():
+        """Operator selector for the Product & Denomination tab.
+        Empty selection = all operators (the default)."""
+        df = filtered_data()
+        if 'operator' not in df.columns or df.empty:
+            return ui.input_selectize("product_operator", None, choices=[], multiple=True,
+                                      options={"placeholder": "All operators"})
+        ops = (df['operator'].astype(str).replace({'': None}).dropna()
+               .value_counts().head(60).index.tolist())
+        return ui.input_selectize(
+            "product_operator", None, choices=ops, multiple=True,
+            options={"placeholder": "All operators — type to filter…"})
+
+    def _apply_product_operator(df):
+        """Scope a product-tab frame to the operator(s) chosen in the tab filter.
+        Empty selection = all operators (returns df unchanged)."""
+        if df is None:
+            return df
+        try:
+            ops = list(input.product_operator() or [])
+        except Exception:
+            ops = []
+        if ops and 'operator' in df.columns:
+            df = df[df['operator'].astype(str).isin(ops)]
+        return df
+
     @reactive.Effect
     @reactive.event(input.apply_product_filter)
     def _on_apply_product_filter():
@@ -3275,7 +3831,7 @@ def server(input, output, session):
 
     @reactive.Calc
     def product_type_filtered_data():
-        df = filtered_data()
+        df = _apply_product_operator(filtered_data())
         # Use last applied selection; fall back to raw input on initial load
         applied = _product_filter_applied()
         if applied is None:
@@ -3738,8 +4294,8 @@ def server(input, output, session):
     def filtered_base_calc():
         """Segment/region/country/date filters — WITHOUT the order-status
         filter, so the Order Status analytics section can still see
-        refunded/cancelled orders."""
-        df = data_rv().copy()
+        refunded/cancelled orders. Core metrics drop 电子钱包 / Touch'n Go."""
+        df = _apply_global_exclusions(data_rv().copy())
         segment = applied_segment()
         region = applied_region() if 'region' in df.columns else None
         country = applied_country()
@@ -3750,13 +4306,7 @@ def server(input, output, session):
             df = df[df['segment'] == segment]
         if region and region != "All" and 'region' in df.columns:
             df = df[df['region'] == region]
-        if country and country not in ("All", ""):
-            if country == _KEY_COUNTRIES_LABEL:
-                kc = _load_key_countries()
-                if kc:
-                    df = df[df['country'].astype(str).isin(kc)]
-            else:
-                df = df[df['country'] == country]
+        df = _filter_by_country(df, country)
         if date_from and date_to and 'order_time' in df.columns:
             start = pd.to_datetime(date_from, errors='coerce')
             end   = pd.to_datetime(date_to,   errors='coerce')
@@ -3777,8 +4327,8 @@ def server(input, output, session):
         return filtered_data_calc()
     
     @reactive.Calc
-    def previous_period_data():
-        df = data_rv().copy()
+    def previous_period_base():
+        df = _apply_global_exclusions(data_rv().copy())
         segment = applied_segment()
         region = applied_region() if 'region' in df.columns else None
         country = applied_country()
@@ -3789,13 +4339,7 @@ def server(input, output, session):
             df = df[df['segment'] == segment]
         if region and region != "All" and 'region' in df.columns:
             df = df[df['region'] == region]
-        if country and country not in ("All", ""):
-            if country == _KEY_COUNTRIES_LABEL:
-                kc = _load_key_countries()
-                if kc:
-                    df = df[df['country'].astype(str).isin(kc)]
-            else:
-                df = df[df['country'] == country]
+        df = _filter_by_country(df, country)
         if date_from and date_to and 'order_time' in df.columns:
             start = pd.to_datetime(date_from, errors='coerce')
             end   = pd.to_datetime(date_to,   errors='coerce')
@@ -3809,9 +4353,13 @@ def server(input, output, session):
                 end   = prev_end.date()
                 df = df[(df['order_time'].dt.date >= start) &
                         (df['order_time'].dt.date < end)]
-        return filter_by_order_status(df, applied_order_status())
+        return df
 
-    def _resolve_currency(currency, country):
+    @reactive.Calc
+    def previous_period_data():
+        return filter_by_order_status(previous_period_base(), applied_order_status())
+
+    def _resolve_currency(currency, country, as_of=None):
         """Return the currency descriptor dict given the choice + country.
 
         For Local Currency: looks up the country in fx_rates.COUNTRY_CURRENCY.
@@ -3824,12 +4372,12 @@ def server(input, output, session):
             return {"symbol": "$", "rate": 1.0 / exchange_rate, "label": "USD",
                     "is_local": False, "fallback": False}
         if currency == "Local Currency":
-            info = fx_rates.lookup(country) if (country and country != "All") else None
+            info = fx_rates.lookup(country, as_of) if (country and country != "All") else None
             if info:
                 sym, code, rate = info
                 # Trailing space so values render as "RM 12,345" not "RM12,345"
                 return {"symbol": f"{sym} ", "rate": float(rate), "label": code,
-                        "is_local": True, "fallback": False}
+                        "is_local": True, "fallback": False, "fx_as_of": fx_rates.RATES_AS_OF}
             # Fallback: country=All or country has no entry
             return {"symbol": "¥", "rate": 1.0, "label": "RMB",
                     "is_local": False, "fallback": True}
@@ -3839,7 +4387,14 @@ def server(input, output, session):
 
     @reactive.Calc
     def currency_converter():
-        return _resolve_currency(applied_currency(), applied_country())
+        dto = applied_date_to()
+        as_of = None
+        if dto:
+            try:
+                as_of = pd.to_datetime(dto, errors='coerce').strftime('%Y-%m')
+            except Exception:
+                as_of = None
+        return _resolve_currency(applied_currency(), applied_country(), as_of)
 
     @render.ui
     @safe_render
@@ -3861,8 +4416,10 @@ def server(input, output, session):
                        "padding: 6px 10px; border-radius: 4px;"
                        "font-size: 0.75em; color: white; margin-top: 6px;")
             )
+        as_of = c.get("fx_as_of")
+        as_of_txt = f" · rates as of {as_of}" if as_of else ""
         return ui.tags.div(
-            f"Showing in {c['label']} ({c['symbol'].strip()})",
+            f"Showing in {c['label']} ({c['symbol'].strip()}){as_of_txt}",
             style=("background: rgba(16, 185, 129, 0.30);"
                    "border-left: 3px solid #10B981;"
                    "padding: 6px 10px; border-radius: 4px;"
@@ -3944,13 +4501,7 @@ def server(input, output, session):
             df = df[df['segment'] == seg]
         if 'region' in df.columns and reg and reg != "All":
             df = df[df['region'] == reg]
-        if ctr and ctr not in ("All", ""):
-            if ctr == _KEY_COUNTRIES_LABEL:
-                kc = _load_key_countries()
-                if kc:
-                    df = df[df['country'].astype(str).isin(kc)]
-            else:
-                df = df[df['country'] == ctr]
+        df = _filter_by_country(df, ctr)
         if df.empty:
             return None
 
@@ -4194,7 +4745,7 @@ def server(input, output, session):
         return ui.tags.div(
             _kpi_card(
                 "💰", "sales-icon",
-                ui.HTML('<span class="lang-en">Total Revenue (GMV)</span><span class="lang-zh">总收入 (GMV)</span>'),
+                ui.HTML('<span class="lang-en">Total Revenue (GMV)</span><span class="lang-zh">营业额 (GMV)</span>'),
                 T.format_full(total_sales, symbol),
                 sales_d,
                 f"AOV: {T.format_full(avg_order_value, symbol)}",
@@ -4225,6 +4776,270 @@ def server(input, output, session):
                 "Geographic spread of orders for the selected period."
             ),
             style="display: flex; flex-wrap: nowrap; justify-content: space-between; gap: 12px; overflow-x: auto;"
+        )
+
+    @render.ui
+    @safe_render
+    def operating_overview_kpis():
+        """Bitsbang-style operating KPI strip implementing 全球共用计算取数公式及标准:
+        充值成功 basis, exclude 电子钱包 + Touch'n Go, 新客=注册月==订单月 (B2C),
+        with MoM vs the prior equal period. Cards needing the 用户列表 (Users table)
+        — 新客数 / 转化率 — are approximated (≈) or shown as needing data."""
+        def _excl_global(d):
+            # Global rule: exclude 电子钱包 (e-wallet) and Touch'n Go (TNG) from core metrics.
+            if d is None or len(d) == 0 or 'product_category' not in d.columns:
+                return d
+            cat = d['product_category'].astype(str)
+            keep = ~(cat.str.contains('电子钱包', na=False)
+                     | cat.str.contains('e-?wallet', case=False, na=False, regex=True)
+                     | cat.str.contains('Touch', case=False, na=False))
+            return d[keep]
+
+        base = _excl_global(filtered_base_calc())     # all statuses, current period + sidebar filters
+        prev_base = _excl_global(previous_period_base())
+        currency = currency_converter()
+        rate, sym = currency['rate'], currency['symbol']
+
+        cur_succ = filter_by_order_status(base, "Successful")
+        prev_succ = filter_by_order_status(prev_base, "Successful")
+
+        def _orders(d):
+            if d is None or len(d) == 0:
+                return 0
+            return int(d['order_id'].nunique()) if 'order_id' in d.columns else len(d)
+
+        def _gmv(d):
+            if d is None or len(d) == 0 or 'sales' not in d.columns:
+                return 0.0
+            return float(d['sales'].sum() * rate)
+
+        def _users(d):
+            if d is None or len(d) == 0 or 'user_id' not in d.columns:
+                return 0
+            return int(d['user_id'].nunique())
+
+        def _uset(d):
+            if d is None or len(d) == 0 or 'user_id' not in d.columns:
+                return set()
+            return set(d['user_id'].dropna().astype(str).unique())
+
+        def _b2c(d):
+            if d is None or len(d) == 0 or 'segment' not in d.columns:
+                return d
+            return d[d['segment'].astype(str).str.upper() == 'B2C']
+
+        def _new_uset(d):
+            """新客成功用户 = 注册月份 == 订单月份 (monthly rule, B2C). None if no register_time."""
+            d = _b2c(d)
+            if d is None or len(d) == 0 or 'register_time' not in d.columns \
+                    or 'order_time' not in d.columns or 'user_id' not in d.columns:
+                return None
+            dd = d.dropna(subset=['register_time', 'order_time', 'user_id'])
+            if dd.empty:
+                return set()
+            regm = pd.to_datetime(dd['register_time'], errors='coerce').dt.to_period('M')
+            ordm = pd.to_datetime(dd['order_time'], errors='coerce').dt.to_period('M')
+            return set(dd.loc[regm == ordm, 'user_id'].astype(str).unique())
+
+        def _mom(cur, prev):
+            return ((cur - prev) / prev * 100) if (prev and prev > 0) else None
+
+        # ── headline (充值成功 basis) ──
+        gmv, gmv_p = _gmv(cur_succ), _gmv(prev_succ)
+        succ_orders, succ_orders_p = _orders(cur_succ), _orders(prev_succ)
+        total_orders, total_orders_p = _orders(base), _orders(prev_base)
+        succ_users, succ_users_p = _users(cur_succ), _users(prev_succ)
+        succ_rate = (succ_orders / total_orders * 100) if total_orders > 0 else None
+        succ_rate_p = (succ_orders_p / total_orders_p * 100) if total_orders_p > 0 else None
+        aov = (gmv / succ_orders) if succ_orders > 0 else 0.0
+        aov_p = (gmv_p / succ_orders_p) if succ_orders_p > 0 else 0.0
+
+        # ── new/old (B2C, 注册月 vs 订单月) + 复购率 + 留存率 (order-based sets) ──
+        cur_new = _new_uset(cur_succ)
+        prev_new = _new_uset(prev_succ)
+        has_reg = cur_new is not None
+        cur_uset, prev_uset = _uset(cur_succ), _uset(prev_succ)
+        repurchase = (len(cur_uset & prev_uset) / len(cur_uset) * 100) if cur_uset else None
+        new_gmv = old_gmv = new_gmv_p = old_gmv_p = retention = None
+        new_ordered = new_ordered_p = None
+        if has_reg:
+            b2c_succ, b2c_succ_p = _b2c(cur_succ), _b2c(prev_succ)
+            new_gmv = float(b2c_succ[b2c_succ['user_id'].astype(str).isin(cur_new)]['sales'].sum() * rate) \
+                if ('sales' in b2c_succ.columns and len(b2c_succ)) else 0.0
+            old_gmv = max(_gmv(b2c_succ) - new_gmv, 0.0)
+            new_gmv_p = float(b2c_succ_p[b2c_succ_p['user_id'].astype(str).isin(prev_new)]['sales'].sum() * rate) \
+                if (b2c_succ_p is not None and 'sales' in b2c_succ_p.columns and len(b2c_succ_p)) else 0.0
+            old_gmv_p = max(_gmv(b2c_succ_p) - new_gmv_p, 0.0)
+            retention = (len(prev_new & cur_uset) / len(prev_new) * 100) if prev_new else None
+            new_ordered = len(cur_new)
+            new_ordered_p = len(prev_new) if prev_new is not None else 0
+
+        def _card(icon, cls, en, zh, value, delta, sub, tip):
+            return _kpi_card(
+                icon, cls,
+                ui.HTML(f'<span class="lang-en">{en}</span><span class="lang-zh">{zh}</span>'),
+                value, delta, ui.HTML(sub) if isinstance(sub, str) and '<span' in sub else sub, tip)
+
+        def _pending(icon, cls, en, zh, sub, tip):
+            return _kpi_card(
+                icon, cls,
+                ui.HTML(f'<span class="lang-en">{en}</span><span class="lang-zh">{zh}</span>'),
+                "—", None, ui.HTML(sub), tip)
+
+        oldnew_sub = ('<span class="lang-en">B2C · reg-month vs order-month</span>'
+                      '<span class="lang-zh">B2C · 注册月 vs 订单月</span>')
+        need_reg = ('<span class="lang-en">needs register_time (B2C)</span>'
+                    '<span class="lang-zh">需注册时间 (B2C)</span>')
+        need_userlist = ('<span class="lang-en">needs 用户列表 (Users)</span>'
+                         '<span class="lang-zh">需用户列表</span>')
+
+        # ── exact 新客数 / 转化率 from the 用户列表 ──
+        df_from, df_to = applied_date_from(), applied_date_to()
+        country_sel = applied_country()
+        new_ids, ul_ok = _new_customer_ids(df_from, df_to, country_sel)
+        pfrom = pto = None
+        if df_from and df_to:
+            _s = pd.to_datetime(df_from, errors='coerce')
+            _e = pd.to_datetime(df_to, errors='coerce')
+            if pd.notna(_s) and pd.notna(_e):
+                if _s > _e:
+                    _s, _e = _e, _s
+                pto, pfrom = _s, _s - (_e - _s)
+        new_ids_prev, _ = _new_customer_ids(pfrom, pto, country_sel)
+
+        def _nset(d):
+            if d is None or len(d) == 0 or 'user_id' not in d.columns:
+                return set()
+            return set(d['user_id'].dropna().astype(str).str.replace(r'\.0$', '', regex=True).unique())
+        succ_ids, succ_ids_p = _nset(cur_succ), _nset(prev_succ)
+
+        if ul_ok:
+            nc, nc_p = len(new_ids), len(new_ids_prev)
+            conv = (len(new_ids & succ_ids) / nc * 100) if nc else None
+            conv_p = (len(new_ids_prev & succ_ids_p) / nc_p * 100) if nc_p else None
+            newcust_card = _card("🌟", "sales-icon", "New Customers", "新客数",
+                f"{nc:,}", _mom(nc, nc_p),
+                '<span class="lang-en">registered in period · 用户列表</span><span class="lang-zh">本期注册 · 用户列表</span>',
+                "新客数 = COUNT(DISTINCT 用户ID) WHERE 注册时间∈周期 (用户列表; 汇总=仅微信端, 微信剔除国家为空).")
+            conv_card = (_card("📈", "orders-icon", "Conversion Rate", "转化率",
+                f"{conv:.1f}%", _mom(conv, conv_p),
+                '<span class="lang-en">new ∩ success / new</span><span class="lang-zh">当月新客∩当月成功 / 当月新客</span>',
+                "转化率 = |当月新客 ∩ 当月成功订单用户| / |当月新客| (用户列表 ∩ 订单表).")
+                if conv is not None else
+                _pending("📈", "orders-icon", "Conversion Rate", "转化率",
+                '<span class="lang-en">no new users in scope</span><span class="lang-zh">本期范围内无新客</span>',
+                "No new registrations in the selected period / country scope."))
+        elif has_reg:
+            newcust_card = _card("🌟", "sales-icon", "New Customers*", "新客数*",
+                (f"≈ {new_ordered:,}" if new_ordered is not None else "-"),
+                _mom(new_ordered, new_ordered_p),
+                '<span class="lang-en">≈ ordered-new · 用户列表 not found</span><span class="lang-zh">≈ 成单新客 · 未找到用户列表</span>',
+                "Approx (用户列表 not found in database/ or the Report folder): distinct B2C 成单 new customers (注册月=订单月).")
+            conv_card = _pending("📈", "orders-icon", "Conversion Rate", "转化率", need_userlist,
+                "转化率 needs the 用户列表 — drop 用户列表*.csv into database/ or the Report Raw Data folder.")
+        else:
+            newcust_card = _pending("🌟", "sales-icon", "New Customers", "新客数", need_userlist,
+                "新客数 must come from the 用户列表 (registration table).")
+            conv_card = _pending("📈", "orders-icon", "Conversion Rate", "转化率", need_userlist,
+                "转化率 needs the 用户列表 (registration table).")
+
+        return ui.tags.div(
+            _card("💰", "sales-icon", "Revenue (GMV)", "营业额 (GMV)",
+                  T.format_full(gmv, sym), _mom(gmv, gmv_p),
+                  '<span class="lang-en">充值成功 · excl e-wallet/TNG</span><span class="lang-zh">充值成功 · 剔除电子钱包/TNG</span>',
+                  "营业额 = SUM(实际支付) WHERE 订单状态='充值成功' (剔除电子钱包/Touch'n Go)."),
+            (_card("👴", "sales-icon", "Returning-customer GMV", "老客营业额",
+                   T.format_full(old_gmv, sym), _mom(old_gmv, old_gmv_p), oldnew_sub,
+                   "老客营业额 = 充值成功 GMV，注册月 < 订单月 (B2C).")
+             if has_reg else
+             _pending("👴", "sales-icon", "Returning-customer GMV", "老客营业额", need_reg,
+                      "Requires B2C register_time (注册时间).")),
+            (_card("🆕", "sales-icon", "New-customer GMV", "新客营业额",
+                   T.format_full(new_gmv, sym), _mom(new_gmv, new_gmv_p), oldnew_sub,
+                   "新客营业额 = 充值成功 GMV，注册月 = 订单月 (B2C).")
+             if has_reg else
+             _pending("🆕", "sales-icon", "New-customer GMV", "新客营业额", need_reg,
+                      "Requires B2C register_time (注册时间).")),
+            _card("📦", "orders-icon", "Successful Orders", "成单数",
+                  f"{succ_orders:,}", _mom(succ_orders, succ_orders_p),
+                  '<span class="lang-en">充值成功 orders</span><span class="lang-zh">充值成功订单</span>',
+                  "成单数 = count of 充值成功 orders."),
+            _card("🧑", "users-icon", "Successful Users", "成单人数",
+                  f"{succ_users:,}", _mom(succ_users, succ_users_p),
+                  '<span class="lang-en">unique buyers</span><span class="lang-zh">去重买家</span>',
+                  "成单人数 = 充值成功 去重用户数."),
+            _card("✅", "users-icon", "Success Rate", "成单率",
+                  (f"{succ_rate:.1f}%" if succ_rate is not None else "-"),
+                  (_mom(succ_rate, succ_rate_p) if (succ_rate is not None and succ_rate_p) else None),
+                  '<span class="lang-en">success ÷ all orders</span><span class="lang-zh">成功 ÷ 全量订单</span>',
+                  "成单率 = 成功订单数 ÷ 全量订单数(含成功/失败)."),
+            _card("💎", "countries-icon", "AOV", "客单价",
+                  T.format_full(aov, sym), _mom(aov, aov_p),
+                  '<span class="lang-en">GMV ÷ successful orders</span><span class="lang-zh">GMV ÷ 成单数</span>',
+                  "客单价 = 营业额(GMV) ÷ 成单数."),
+            _card("🔁", "orders-icon", "Repurchase Rate", "复购率",
+                  (f"{repurchase:.1f}%" if repurchase is not None else "-"), None,
+                  '<span class="lang-en">this-mo ∩ last-mo / this-mo</span><span class="lang-zh">本月∩上月成单 / 本月成单</span>',
+                  "复购率 = |上月成功用户 ∩ 本月成功用户| / |本月成功用户|."),
+            (_card("📌", "users-icon", "Retention Rate", "留存率",
+                   (f"{retention:.1f}%" if retention is not None else "-"), None,
+                   '<span class="lang-en">last-mo new ∩ this-mo / last-mo new</span><span class="lang-zh">上月新客∩本月成单 / 上月新客</span>',
+                   "留存率 = |上月新客成功用户 ∩ 本月成功用户| / |上月新客成功用户|.")
+             if has_reg else
+             _pending("📌", "users-icon", "Retention Rate", "留存率", need_reg,
+                      "Requires B2C register_time to identify 上月新客.")),
+            newcust_card,
+            conv_card,
+            style="display: flex; flex-wrap: wrap; justify-content: flex-start; gap: 12px;"
+        )
+
+    @render.ui
+    @safe_render
+    def net_contribution_kpi():
+        """Net Contribution (净贡献) = 成功GMV − COGS(结算价→RMB) − 券支出, with
+        已退款GMV shown as context (excluded from Net). MoM vs prior equal period."""
+        base = filtered_base_calc()            # already excludes 电子钱包/TNG
+        prev_base = previous_period_base()
+        currency = currency_converter(); rate, sym = currency['rate'], currency['symbol']
+
+        def _net(b):
+            if b is None or len(b) == 0:
+                return 0.0, 0.0, 0.0, 0.0, 0.0
+            succ = filter_by_order_status(b, "Successful")
+            refunded = filter_by_order_status(b, "Refunded")
+            gmv = float(succ['sales'].sum() * rate) if 'sales' in succ.columns else 0.0
+            scol = 'settlement_rmb' if 'settlement_rmb' in succ.columns else 'settlement_price'
+            cogs = float(pd.to_numeric(succ[scol], errors='coerce').sum() * rate) if scol in succ.columns else 0.0
+            coupon = float(pd.to_numeric(succ['coupon_amount'], errors='coerce').sum() * rate) if 'coupon_amount' in succ.columns else 0.0
+            refunded_gmv = float(refunded['sales'].sum() * rate) if (refunded is not None and 'sales' in refunded.columns) else 0.0
+            return gmv - cogs - coupon, gmv, cogs, coupon, refunded_gmv
+
+        net, gmv, cogs, coupon, refunded_gmv = _net(base)
+        net_p = _net(prev_base)[0]
+        delta = ((net - net_p) / net_p * 100) if net_p and net_p > 0 else None
+        margin_pct = (net / gmv * 100) if gmv else 0.0
+
+        sub = (f'<span class="lang-en">GMV {T.format_number(gmv, sym)} − COGS {T.format_number(cogs, sym)} '
+               f'− coupon {T.format_number(coupon, sym)}</span>'
+               f'<span class="lang-zh">成功GMV {T.format_number(gmv, sym)} − COGS {T.format_number(cogs, sym)} '
+               f'− 券 {T.format_number(coupon, sym)}</span>')
+        tip = ("Net Contribution = 成功GMV − COGS(结算价→RMB) − 券支出. "
+               "已退款GMV shown separately (excluded). Supplier settlement refund on 已退款 unconfirmed (review B2).")
+        return ui.tags.div(
+            _kpi_card("💎", "sales-icon",
+                      ui.HTML('<span class="lang-en">Net Contribution</span><span class="lang-zh">净贡献</span>'),
+                      T.format_full(net, sym), delta, ui.HTML(sub), tip),
+            _kpi_card("📊", "countries-icon",
+                      ui.HTML('<span class="lang-en">Net Margin %</span><span class="lang-zh">净贡献率</span>'),
+                      f"{margin_pct:.1f}%", None,
+                      ui.HTML('<span class="lang-en">Net ÷ 成功GMV</span><span class="lang-zh">净贡献 ÷ 成功GMV</span>'),
+                      "Net Contribution as a share of successful GMV."),
+            _kpi_card("↩", "orders-icon",
+                      ui.HTML('<span class="lang-en">Refunded GMV</span><span class="lang-zh">已退款GMV</span>'),
+                      T.format_full(refunded_gmv, sym), None,
+                      ui.HTML('<span class="lang-en">booked but returned (excluded)</span><span class="lang-zh">已退款（不计入净贡献）</span>'),
+                      "GMV of 已退款 orders — booked but refunded; excluded from Net Contribution."),
+            style="display: flex; flex-wrap: wrap; gap: 12px;"
         )
 
     @render.ui
@@ -4263,7 +5078,9 @@ def server(input, output, session):
             cur_c.index = cur_c.index.astype(str)
             prv_c.index = prv_c.index.astype(str)
             gc = pd.concat([cur_c.rename('cur'), prv_c.rename('prv')], axis=1).fillna(0)
-            gc = gc[(gc['prv'] >= max(100, gc['prv'].quantile(0.5)))]
+            # Significance floor: ≥500 prior-period revenue (matches alerts_data min_base)
+            # so a 2→6-order market can't outrank a real mover on % alone.
+            gc = gc[(gc['prv'] >= max(500.0, gc['prv'].quantile(0.5)))]
             if not gc.empty:
                 gc['pct'] = (gc['cur'] - gc['prv']) / gc['prv'] * 100
                 gc = gc.dropna(subset=['pct'])
@@ -4345,6 +5162,20 @@ def server(input, output, session):
             fill='tozeroy', fillcolor='rgba(91,108,255,0.10)',
             hovertemplate='<b>%{x|%Y-%m-%d}</b><br>Sales: ' + symbol + '%{y:,.2f}<extra></extra>',
         ))
+        # 3.2 Targets vs-plan: dashed plan line from database/targets.csv (per-month revenue target)
+        targets = _load_targets()
+        if targets:
+            months = pd.to_datetime(sales_trend['order_time']).dt.to_period('M').astype(str)
+            tvals = [(targets.get(('revenue', m)) or targets.get(('gmv', m))) for m in months]
+            tvals_disp = [(v * currency['rate']) if v is not None else None for v in tvals]
+            if any(v is not None for v in tvals_disp):
+                fig.add_trace(go.Scatter(
+                    x=sales_trend['order_time'], y=tvals_disp,
+                    mode='lines', name=_tt('Target'),
+                    line=dict(color=T.WARNING, width=2, dash='dash'),
+                    connectgaps=False,
+                    hovertemplate='<b>%{x|%Y-%m}</b><br>Target: ' + symbol + '%{y:,.0f}<extra></extra>',
+                ))
         T.apply_theme(fig, title=_tt(f"{period} Sales Trend"),
                       xaxis_title=None, yaxis_title=_tt(f"Sales ({symbol})"),
                       hovermode='x unified', margin=dict(l=10, r=10, t=70, b=10),
@@ -4492,7 +5323,7 @@ def server(input, output, session):
         orders_d = ((total_orders - prev_orders) / prev_orders * 100) if prev_orders > 0 else None
 
         return ui.tags.div(
-            _kpi_card("💰", "sales-icon", _bl("Total Revenue (GMV)", "总收入 (GMV)"),
+            _kpi_card("💰", "sales-icon", _bl("Total Revenue (GMV)", "营业额 (GMV)"),
                       T.format_full(total_sales, sym), sales_d,
                       f"vs previous period",
                       f"Gross Merchandise Value in {currency['label']} for the selected period."),
@@ -4500,7 +5331,7 @@ def server(input, output, session):
                       f"{total_orders:,}", orders_d,
                       "Unique order IDs",
                       "Distinct orders placed in the selected period."),
-            _kpi_card("💎", "users-icon", _bl("Avg Order Value (AOV)", "平均订单价值 (AOV)"),
+            _kpi_card("💎", "users-icon", _bl("Avg Order Value (AOV)", "客单价 (AOV)"),
                       T.format_full(aov, sym), None,
                       "GMV ÷ Order Volume",
                       "Average revenue per transaction."),
@@ -5166,8 +5997,7 @@ def server(input, output, session):
             df = df[df['segment'] == seg]
         if 'region' in df.columns and reg and reg != "All":
             df = df[df['region'] == reg]
-        if ctr and ctr != "All":
-            df = df[df['country'] == ctr]
+        df = _filter_by_country(df, ctr)
         return filter_by_order_status(df, applied_order_status())
 
     @reactive.Calc
@@ -5432,16 +6262,12 @@ def server(input, output, session):
         currency = currency_converter()
         cs = df.groupby('country', observed=True)['sales'].sum().mul(currency['rate']).reset_index()
         cs = cs.sort_values('sales', ascending=True).tail(15)
-        fig = go.Figure(go.Bar(
-            x=cs['sales'], y=cs['country'], orientation='h',
-            marker=dict(color=cs['sales'], colorscale=T.SCALE_SEQUENTIAL, showscale=False),
-            text=[T.format_number(v, currency['symbol']) for v in cs['sales']],
-            textposition='outside', textfont=dict(size=11, color="#334155"),
-            hovertemplate='<b>%{y}</b><br>Sales: ' + currency['symbol'] + '%{x:,.0f}<extra></extra>',
-        ))
-        T.apply_theme(fig, title=_tt(f"Top 15 countries by sales · {currency['label']}"),
-                      xaxis_title=_tt(f"Sales ({currency['symbol']})"), yaxis_title=None,
-                      margin=dict(l=10, r=80, t=50, b=10), height=520)
+        fig = charts.topn_hbar(
+            values=cs['sales'], labels=cs['country'],
+            title=_tt(f"Top 15 countries by sales · {currency['label']}"),
+            xaxis_title=_tt(f"Sales ({currency['symbol']})"),
+            hover_label='Sales: ' + currency['symbol'] + '%{x:,.0f}',
+            value_text=[T.format_number(v, currency['symbol']) for v in cs['sales']])
         return ui.HTML(T.fig_to_html(fig))
 
     @render.ui
@@ -5498,16 +6324,11 @@ def server(input, output, session):
             return _no_data()
         co = df.groupby('country', observed=True)['order_id'].nunique().nlargest(15).reset_index()
         co = co.sort_values('order_id')
-        fig = go.Figure(go.Bar(
-            x=co['order_id'], y=co['country'], orientation='h',
-            marker=dict(color=co['order_id'], colorscale=T.SCALE_SEQUENTIAL, showscale=False),
-            text=[T.format_int(v) for v in co['order_id']],
-            textposition='outside', textfont=dict(size=11, color="#334155"),
-            hovertemplate='<b>%{y}</b><br>Orders: %{x:,}<extra></extra>',
-        ))
-        T.apply_theme(fig, title=_tt("Top 15 countries by orders"),
-                      xaxis_title=_tt("Orders"), yaxis_title=None,
-                      margin=dict(l=10, r=80, t=50, b=10), height=520)
+        fig = charts.topn_hbar(
+            values=co['order_id'], labels=co['country'],
+            title=_tt("Top 15 countries by orders"), xaxis_title=_tt("Orders"),
+            hover_label='Orders: %{x:,}',
+            value_text=[T.format_int(v) for v in co['order_id']])
         return ui.HTML(T.fig_to_html(fig))
 
     # ── New: Market Intelligence additions ───────────────────────────────────
@@ -5527,17 +6348,12 @@ def server(input, output, session):
         agg = agg.dropna(subset=['aov']).nlargest(15, 'aov').sort_values('aov', ascending=True)
         if agg.empty:
             return _no_data()
-        fig = go.Figure(go.Bar(
-            x=agg['aov'], y=agg['country'], orientation='h',
-            marker=dict(color=agg['aov'], colorscale=T.SCALE_SEQUENTIAL, showscale=False,
-                        line=dict(color='white', width=1)),
-            text=[T.format_number(v, sym) for v in agg['aov']],
-            textposition='outside', textfont=dict(size=11, color="#334155"),
-            hovertemplate='<b>%{y}</b><br>AOV: ' + sym + '%{x:,.2f}<extra></extra>',
-        ))
-        T.apply_theme(fig, title=_tt(f"Average Order Value (AOV) by Market · Top 15 · {currency['label']}"),
-                      xaxis_title=_tt(f"AOV ({sym})"), yaxis_title=None,
-                      margin=dict(l=10, r=80, t=50, b=10), height=520)
+        fig = charts.topn_hbar(
+            values=agg['aov'], labels=agg['country'], color_line=True,
+            title=_tt(f"Average Order Value (AOV) by Market · Top 15 · {currency['label']}"),
+            xaxis_title=_tt(f"AOV ({sym})"),
+            hover_label='AOV: ' + sym + '%{x:,.2f}',
+            value_text=[T.format_number(v, sym) for v in agg['aov']])
         return ui.HTML(T.fig_to_html(fig))
 
     # ── New: Operational Intelligence additions ───────────────────────────────
@@ -7150,7 +7966,7 @@ def server(input, output, session):
 
     @reactive.Calc
     def _category_frame():
-        df = filtered_data()
+        df = _apply_product_operator(filtered_data())
         if 'product_category' not in df.columns:
             return None
         d = df[df['product_category'].notna()
@@ -7273,7 +8089,7 @@ def server(input, output, session):
     def _airtime_frame():
         """B2C airtime/top-up rows with a display label for each denomination
         (SKU name like 'RM 50' preferred, formatted number fallback)."""
-        df = filtered_data()
+        df = _apply_product_operator(filtered_data())
         if 'product_category' not in df.columns:
             return None
         mask = df['product_category'].astype(str).str.contains(
@@ -7979,6 +8795,116 @@ def server(input, output, session):
 
     @render.ui
     @safe_render
+    def key_country_3m_trend():
+        df = _apply_global_exclusions(data_rv())
+        if 'segment' in df.columns:
+            df = df[df['segment'].astype(str).str.upper() == 'B2C']
+        df = filter_by_order_status(df, "Successful")
+        if df is None or df.empty or 'order_time' not in df.columns or 'country' not in df.columns:
+            return _no_data()
+        currency = currency_converter(); rate, sym = currency['rate'], currency['symbol']
+        kc = _load_key_countries()
+        d = df[df['country'].astype(str).isin(kc)].copy()
+        if d.empty:
+            return _no_data("No key-country data in the current selection.")
+        d['ym'] = pd.to_datetime(d['order_time'], errors='coerce').dt.to_period('M').astype(str)
+        months = sorted([m for m in d['ym'].dropna().unique() if m and m != 'NaT'])[-3:]
+        d = d[d['ym'].isin(months)]
+        if d.empty:
+            return _no_data()
+        piv = d.groupby(['country', 'ym'], observed=True)['sales'].sum().mul(rate).reset_index()
+        countries = (piv.groupby('country')['sales'].sum()
+                     .sort_values(ascending=False).index.tolist())
+        pal = getattr(T, 'PALETTE', None)
+        fig = go.Figure()
+        for i, m in enumerate(months):
+            sub = piv[piv['ym'] == m].set_index('country')['sales']
+            fig.add_trace(go.Bar(name=m, x=countries,
+                                  y=[float(sub.get(c, 0)) for c in countries],
+                                  marker=dict(color=(pal[i % len(pal)] if pal else None))))
+        fig.update_layout(barmode='group')
+        T.apply_theme(fig, title=_tt("Key Countries — Last 3 Months Revenue (重点国家)"),
+                      xaxis_title=None, yaxis_title=_tt(f"Revenue ({sym})"), height=430,
+                      legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="left", x=0),
+                      margin=dict(l=10, r=10, t=60, b=90))
+        fig.update_xaxes(tickangle=-25)
+        return ui.HTML(T.fig_to_html(fig))
+
+    @render.ui
+    @safe_render
+    def channel_analysis_chart():
+        df = filtered_data()
+        if 'segment' in df.columns:
+            df = df[df['segment'].astype(str).str.upper() == 'B2C']
+        d = _with_channel(df)
+        if d is None or 'channel' not in d.columns or d['channel'].isna().all():
+            return _no_data("渠道来源 (会员来源) requires the 用户列表 — file not found.")
+        currency = currency_converter(); rate, sym = currency['rate'], currency['symbol']
+        d = d.dropna(subset=['channel'])
+        g = d.groupby('channel', observed=True)
+        agg = pd.DataFrame({
+            'gmv': g['sales'].sum() * rate,
+            'orders': g['order_id'].nunique() if 'order_id' in d.columns else g.size(),
+        }).reset_index().sort_values('gmv', ascending=True).tail(12)
+        total = float(agg['gmv'].sum())
+        fig = go.Figure(go.Bar(
+            x=agg['gmv'], y=agg['channel'], orientation='h',
+            marker=dict(color=agg['gmv'], colorscale=T.SCALE_SEQUENTIAL, showscale=False,
+                        line=dict(color='white', width=1)),
+            text=[f"{T.format_number(v, sym)} · {v/total*100:.0f}%" if total else T.format_number(v, sym)
+                  for v in agg['gmv']],
+            textposition='outside', textfont=dict(size=11, color="#334155"),
+            hovertemplate='<b>%{y}</b><br>GMV: ' + sym + '%{x:,.0f}<extra></extra>',
+        ))
+        T.apply_theme(fig, title=_tt("Revenue by Channel (会员来源, B2C)"),
+                      xaxis_title=_tt(f"Revenue ({sym})"), yaxis_title=None, height=440,
+                      margin=dict(l=10, r=120, t=50, b=10))
+        return ui.HTML(T.fig_to_html(fig))
+
+    @render.data_frame
+    @safe_grid
+    def channel_scorecard():
+        """3.3 Channel ROI/CAC — per 会员来源: GMV, orders, customers, new customers,
+        coupon spend, ROI (GMV÷spend), CAC (spend÷new)."""
+        df = filtered_data()
+        if 'segment' in df.columns:
+            df = df[df['segment'].astype(str).str.upper() == 'B2C']
+        d = _with_channel(df)
+        if d is None or 'channel' not in d.columns or d['channel'].isna().all():
+            return render.DataGrid(pd.DataFrame({'Status': ['渠道来源 ROI requires the 用户列表 — not found.']}))
+        currency = currency_converter(); rate, sym = currency['rate'], currency['symbol']
+        d = d.dropna(subset=['channel']).copy()
+        d['_coupon'] = pd.to_numeric(d['coupon_amount'], errors='coerce') if 'coupon_amount' in d.columns else 0.0
+        g = d.groupby('channel', observed=True)
+        gmv = g['sales'].sum() * rate
+        orders = g['order_id'].nunique() if 'order_id' in d.columns else g.size()
+        customers = g['user_id'].nunique() if 'user_id' in d.columns else 0
+        coupon = g['_coupon'].sum() * rate
+        new_by_ch = pd.Series(dtype=float)
+        if {'register_time', 'order_time', 'user_id'}.issubset(d.columns):
+            dd = d.dropna(subset=['register_time', 'order_time', 'user_id'])
+            if not dd.empty:
+                regm = pd.to_datetime(dd['register_time'], errors='coerce').dt.to_period('M')
+                ordm = pd.to_datetime(dd['order_time'], errors='coerce').dt.to_period('M')
+                nd = dd[regm.values == ordm.values]
+                new_by_ch = nd.groupby('channel', observed=True)['user_id'].nunique()
+        agg = pd.DataFrame({'gmv': gmv, 'orders': orders, 'customers': customers, 'coupon': coupon})
+        agg['new'] = new_by_ch.reindex(agg.index).fillna(0)
+        agg = agg.sort_values('gmv', ascending=False)
+        agg['roi'] = agg['gmv'] / agg['coupon'].replace(0, np.nan)
+        agg['cac'] = agg['coupon'] / agg['new'].replace(0, np.nan)
+        out = pd.DataFrame({'Channel (会员来源)': agg.index})
+        out[f'GMV ({sym})']          = agg['gmv'].apply(lambda x: f"{x:,.0f}").values
+        out['Orders']                = agg['orders'].apply(lambda x: f"{int(x):,}").values
+        out['Customers']             = agg['customers'].apply(lambda x: f"{int(x):,}").values
+        out['New Customers']         = agg['new'].apply(lambda x: f"{int(x):,}").values
+        out[f'Coupon Spend ({sym})'] = agg['coupon'].apply(lambda x: f"{x:,.0f}").values
+        out['ROI (GMV÷Spend)']       = agg['roi'].apply(lambda x: f"{x:,.0f}×" if pd.notna(x) else "—").values
+        out[f'CAC ({sym}/new)']      = agg['cac'].apply(lambda x: f"{x:,.1f}" if pd.notna(x) else "—").values
+        return render.DataGrid(_tdf(out), filters=True)
+
+    @render.ui
+    @safe_render
     def new_vs_returning_chart():
         df = filtered_data()
         if 'segment' in df.columns:
@@ -7986,13 +8912,26 @@ def server(input, output, session):
         if 'user_id' not in df.columns or 'order_id' not in df.columns:
             return ui.HTML('<div style="color:#64748B;padding:20px;">Customer data not available (B2C only).</div>')
         currency = currency_converter()
-        user_orders = df.groupby('user_id', observed=True)['order_id'].nunique()
-        if user_orders.empty:
-            return _no_data()
-        new_count = int((user_orders == 1).sum())
-        returning_count = int((user_orders > 1).sum())
+        # China-team standard: 新客 = 注册月 == 订单月; 老客 = 注册月 < 订单月 (B2C).
+        if {'register_time', 'order_time'}.issubset(df.columns):
+            g = df.dropna(subset=['register_time', 'order_time', 'user_id']).copy()
+            if g.empty:
+                return _no_data()
+            regm = pd.to_datetime(g['register_time'], errors='coerce').dt.to_period('M')
+            ordm = pd.to_datetime(g['order_time'], errors='coerce').dt.to_period('M')
+            g['_is_new'] = (regm == ordm)
+            user_is_new = g.groupby('user_id', observed=True)['_is_new'].max()
+            new_count = int(user_is_new.sum())
+            returning_count = int((~user_is_new).sum())
+            labels = ['New 新客 (注册月=订单月)', 'Returning 老客 (注册月<订单月)']
+        else:   # fallback when register_time is unavailable
+            user_orders = df.groupby('user_id', observed=True)['order_id'].nunique()
+            if user_orders.empty:
+                return _no_data()
+            new_count = int((user_orders == 1).sum())
+            returning_count = int((user_orders > 1).sum())
+            labels = ['New Customers (1 order)', 'Returning Customers (2+ orders)']
         total = new_count + returning_count
-        labels = ['New Customers (1 order)', 'Returning Customers (2+ orders)']
         values = [new_count, returning_count]
         fig = go.Figure(go.Pie(
             labels=labels, values=values, hole=0.55,
@@ -8001,7 +8940,7 @@ def server(input, output, session):
             hovertemplate='<b>%{label}</b><br>Customers: %{value:,}<br>%{percent}<extra></extra>',
         ))
         ret_pct = returning_count / total * 100 if total > 0 else 0
-        fig.add_annotation(text=f"<b>Retention</b><br>{ret_pct:.1f}%",
+        fig.add_annotation(text=f"<b>老客 Returning</b><br>{ret_pct:.1f}%",
                            x=0.5, y=0.5, showarrow=False, font=dict(size=14, color="#0F172A"))
         T.apply_theme(fig, title=_tt("New vs. Returning Customers (B2C)"),
                       showlegend=True, margin=dict(l=10, r=10, t=50, b=10),
@@ -8096,28 +9035,37 @@ def server(input, output, session):
         if user_orders.empty:
             return ui.p("No user data in the current selection.")
         avg_orders = user_orders['order_count'].mean()
-        retention_rate = (user_orders['order_count'] > 1).mean() * 100
         repeat_users = (user_orders['order_count'] > 1).sum()
         total_users = len(user_orders)
         single_purchase = (user_orders['order_count'] == 1).sum()
+
+        # China-team standard 复购率 / 留存率 (vs prior equal period, B2C 充值成功 basis)
+        prev = previous_period_data()
+        if 'segment' in prev.columns:
+            prev = prev[prev['segment'] == 'B2C']
+        cur_uids = set(df['user_id'].dropna().astype(str).unique())
+        prev_uids = set(prev['user_id'].dropna().astype(str).unique()) if 'user_id' in prev.columns else set()
+        repurchase_std = (len(cur_uids & prev_uids) / len(cur_uids) * 100) if cur_uids else None
+        prev_new = _reg_new_user_set(prev)
+        retention_std = (len(prev_new & cur_uids) / len(prev_new) * 100) if prev_new else None
 
         return ui.tags.div(
             _kpi_card("👥", "users-icon", _bl("Active Customers (B2C)", "活跃客户数 (B2C)"),
                       f"{total_users:,}", None,
                       f"{T.format_int(repeat_users)} repeat · {T.format_int(single_purchase)} one-time",
                       "Unique B2C user IDs in the selected period."),
-            _kpi_card("🔁", "users-icon", _bl("Retention Rate", "留存率"),
-                      T.format_pct(retention_rate, 1), None,
-                      f"{T.format_int(repeat_users)} customers came back",
-                      "Percent of customers who placed more than one order."),
+            _kpi_card("📌", "users-icon", _bl("Retention Rate", "留存率"),
+                      (T.format_pct(retention_std, 1) if retention_std is not None else "—"), None,
+                      _bl("prev-period new ∩ this-period", "上月新客∩本月成单 / 上月新客"),
+                      "留存率 = |上月新客成功用户 ∩ 本月成功用户| / |上月新客成功用户| (vs prior equal period)."),
             _kpi_card("🔄", "orders-icon", _bl("Avg Orders / Customer", "客均订单数"),
                       f"{avg_orders:.2f}", None,
                       "Lifetime in current selection",
                       "Mean number of orders per active B2C customer."),
-            _kpi_card("⭐", "sales-icon", _bl("Repeat Purchase Rate", "复购率"),
-                      T.format_pct(repeat_users/total_users*100, 1) if total_users else "—", None,
-                      f"{T.format_int(repeat_users)} of {T.format_int(total_users)}",
-                      "Share of customers who are repeat buyers."),
+            _kpi_card("🔁", "sales-icon", _bl("Repeat Purchase Rate", "复购率"),
+                      (T.format_pct(repurchase_std, 1) if repurchase_std is not None else "—"), None,
+                      _bl("this ∩ prev / this period", "本月∩上月成单 / 本月成单"),
+                      "复购率 = |上月成功用户 ∩ 本月成功用户| / |本月成功用户| (vs prior equal period)."),
             style="display: flex; flex-wrap: nowrap; justify-content: space-between; gap: 12px; overflow-x: auto;"
         )
 
@@ -8267,9 +9215,14 @@ def server(input, output, session):
         if metric == "Retention %":
             mat_for_color.iloc[:, 0] = np.nan  # don't let the 100% column dominate the colorscale
 
+        # Small-sample guard (A7): flag cohorts with < min_n customers (noisy tail).
+        sizes = d['cohort_sizes']
+        min_n = max(30, int((sizes.max() if len(sizes) else 0) * 0.05))
+        ylabels = [f"{c}  (n={sizes.get(c, 0):,.0f})" + (" ⚠" if (sizes.get(c, 0) or 0) < min_n else "")
+                   for c in mat.index]
         fig = go.Figure(go.Heatmap(
             z=mat_for_color.values, x=mat.columns.astype(str),
-            y=[f"{c}  (n={d['cohort_sizes'].get(c, 0):,.0f})" for c in mat.index],
+            y=ylabels,
             colorscale=T.SCALE_SEQUENTIAL, showscale=True,
             colorbar=dict(title=dict(text=ctxt, font=dict(size=11)), thickness=12, len=0.7),
             hovertemplate=('<b>Cohort:</b> %{y}<br>'
@@ -8289,8 +9242,12 @@ def server(input, output, session):
         T.apply_theme(fig, title=title,
                       xaxis_title=_tt("Months since first order"),
                       yaxis_title=_tt("Cohort (month of first order)"),
-                      margin=dict(l=10, r=10, t=50, b=10),
+                      margin=dict(l=10, r=10, t=66, b=10),
                       height=max(380, 24 * len(mat) + 100))
+        fig.add_annotation(
+            text=f"⚠ = cohort with fewer than {min_n:,} customers (small sample — interpret with caution)",
+            xref="paper", yref="paper", x=0, y=1.05, showarrow=False,
+            font=dict(size=10, color="#94A3B8"), align="left")
         return ui.HTML(T.fig_to_html(fig))
 
     @render.ui
@@ -8638,33 +9595,13 @@ def server(input, output, session):
         T.apply_theme(bar_fig, title=_tt("Top 15 IP Countries (B2C Order Origin)"),
                       xaxis_title=_tt("Orders"), yaxis_title=None,
                       margin=dict(l=10, r=80, t=50, b=10), height=420)
-        # World choropleth by IP country — convert ISO-2 codes to ISO-3 for reliable matching
-        ip_all = df2['ip_country'].value_counts().reset_index()
-        ip_all.columns = ['ip_country', 'orders']
-        ip_all['iso3'] = ip_all['ip_country'].str.strip().str.upper().map(T.ISO2_TO_ISO3).fillna(ip_all['ip_country'])
-        map_fig = px.choropleth(
-            ip_all,
-            locations='iso3',
-            locationmode='ISO-3',
-            color='orders',
-            color_continuous_scale='Blues',
-            hover_name='ip_country',
-            hover_data={'iso3': False, 'orders': True},
-            labels={'orders': 'Orders'},
-        )
-        map_fig.update_layout(
-            geo=dict(showframe=False, showcoastlines=True, projection_type='natural earth',
-                     showland=True, landcolor='#F1F5F9',
-                     showocean=True, oceancolor='#E2E8F0'),
-            coloraxis_colorbar=dict(title=dict(text="Orders", font=dict(size=11)),
-                                    thickness=12, len=0.6),
-            margin=dict(l=0, r=0, t=50, b=0),
-        )
-        T.apply_theme(map_fig, title=_tt("Global IP Origin Distribution (B2C)"), height=420)
+        # NOTE: the world choropleth map ("Global IP Origin Distribution") was
+        # removed — low decision value vs. its visual weight. The country–IP
+        # mismatch badge + Top-15 IP countries bar below preserve the useful
+        # fraud / VPN signal (see Dashboard_Review_Findings A8).
         return ui.tags.div(
             ui.HTML(mismatch_badge),
             ui.HTML(T.fig_to_html(bar_fig)),
-            ui.HTML(T.fig_to_html(map_fig)),
         )
 
     # ── B2B Agent Performance ─────────────────────────────────────────────────
@@ -8694,28 +9631,34 @@ def server(input, output, session):
         grp = df.groupby(id_cols, observed=True)
         orders_s  = grp['order_id'].nunique()
         revenue_s = grp['sales'].sum()
+        scol = 'settlement_rmb' if 'settlement_rmb' in df.columns else (
+            'settlement_price' if 'settlement_price' in df.columns else None)
         agg = pd.DataFrame({'orders': orders_s, 'revenue': revenue_s}).reset_index()
         agg['revenue'] = agg['revenue'] * rate
-        agg['aov']     = agg['revenue'] / agg['orders'].replace(0, np.nan)
+        if scol:   # 3.4 customer/agent-level profitability — join margin (revenue − COGS)
+            cost_df = grp[scol].sum(min_count=1).reset_index().rename(columns={scol: '_cost'})
+            agg = agg.merge(cost_df, on=id_cols, how='left')
+            agg['margin'] = agg['revenue'] - pd.to_numeric(agg['_cost'], errors='coerce') * rate
+            agg['margin_pct'] = agg['margin'] / agg['revenue'].replace(0, np.nan) * 100
+        agg['aov'] = agg['revenue'] / agg['orders'].replace(0, np.nan)
         agg = agg.sort_values('revenue', ascending=False).head(50)
         total_rev = agg['revenue'].sum()
         agg['share_pct'] = (agg['revenue'] / total_rev * 100).round(2) if total_rev > 0 else 0.0
         agg['cum_pct']   = agg['share_pct'].cumsum().round(2)
-        out = agg.copy()
-        out['revenue']   = out['revenue'].apply(lambda x: f"{x:,.2f}" if pd.notna(x) else "—")
-        out['aov']       = out['aov'].apply(lambda x: f"{x:,.2f}" if pd.notna(x) else "—")
-        out['orders']    = out['orders'].apply(lambda x: f"{int(x):,}")
-        out['share_pct'] = out['share_pct'].apply(lambda x: f"{x:.2f}%")
-        out['cum_pct']   = out['cum_pct'].apply(lambda x: f"{x:.2f}%")
-        metric_cols = [f'Revenue ({sym})', f'AOV ({sym})', 'Revenue Share %', 'Cum. Share %']
-        if has_name and has_uid:
-            out.columns = ['Agent Name', 'Agent ID', 'Orders'] + metric_cols
-        elif has_name:
-            out.columns = ['Agent Name', 'Orders'] + metric_cols
-        elif has_uid:
-            out.columns = ['Agent ID', 'Orders'] + metric_cols
-        else:
-            out.columns = ['Order ID', 'Orders'] + metric_cols
+
+        # Build the display frame with explicit, ordered columns (robust to id_cols).
+        id_label = {'agent_name': 'Agent Name', 'user_id': 'Agent ID', 'order_id': 'Order ID'}
+        out = pd.DataFrame()
+        for c in id_cols:
+            out[id_label.get(c, c)] = agg[c]
+        out['Orders'] = agg['orders'].apply(lambda x: f"{int(x):,}")
+        out[f'Revenue ({sym})'] = agg['revenue'].apply(lambda x: f"{x:,.2f}" if pd.notna(x) else "—")
+        if 'margin' in agg.columns:
+            out[f'Gross Margin ({sym})'] = agg['margin'].apply(lambda x: f"{x:,.2f}" if pd.notna(x) else "—")
+            out['Margin %'] = agg['margin_pct'].apply(lambda x: f"{x:.1f}%" if pd.notna(x) else "—")
+        out[f'AOV ({sym})'] = agg['aov'].apply(lambda x: f"{x:,.2f}" if pd.notna(x) else "—")
+        out['Revenue Share %'] = agg['share_pct'].apply(lambda x: f"{x:.2f}%")
+        out['Cum. Share %'] = agg['cum_pct'].apply(lambda x: f"{x:.2f}%")
         return render.DataGrid(_tdf(out), filters=True)
 
     # ── Marketing & Promotions (B2C coupons / promos / merchandising) ────────
@@ -9291,7 +10234,7 @@ def server(input, output, session):
                 ph = int(hc.idxmax())
                 peak = f"{ph:02d}:00–{(ph + 1) % 24:02d}:00"
         cards = [
-            _kpi_card("💰", "sales-icon", _bl("Total Revenue (GMV)", "总收入 (GMV)"),
+            _kpi_card("💰", "sales-icon", _bl("Total Revenue (GMV)", "营业额 (GMV)"),
                       T.format_number(m['gmv'], sym), _pct_delta(m['gmv'], pm['gmv']),
                       "Sum of sales in the window", "GMV for the filtered window; delta vs previous equivalent window."),
             _kpi_card("📦", "orders-icon", _bl("Orders", "订单量"),
@@ -9301,7 +10244,7 @@ def server(input, output, session):
                       T.format_int(m['benef']) if m['benef'] else "—",
                       _pct_delta(m['benef'], pm['benef']) if m['benef'] else None,
                       "Unique recharge numbers", "Distinct phone numbers recharged."),
-            _kpi_card("💵", "countries-icon", _bl("AOV", "平均订单价值"),
+            _kpi_card("💵", "countries-icon", _bl("AOV", "客单价"),
                       T.format_number(m['aov'], sym), _pct_delta(m['aov'], pm['aov']),
                       "Avg order value", "GMV ÷ orders."),
             _kpi_card("📈", "sales-icon", _bl("Gross Margin", "毛利"),

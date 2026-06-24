@@ -314,48 +314,149 @@ def _append_dedup(existing: pd.DataFrame | None, incoming: pd.DataFrame,
     return merged, new_rows_count, dup_count
 
 
-def append_agent(incoming: pd.DataFrame) -> dict:
-    """Append a daily Agent batch. Returns a status dict."""
+# ---------------------------------------------------------------------------
+# Import hardening (4.1): dup-file guard · row quarantine · restatement · audit
+# ---------------------------------------------------------------------------
+
+def _content_hash(df: "pd.DataFrame | None"):
+    """Deterministic content fingerprint of an incoming batch (dup-file guard)."""
+    import hashlib
+    if df is None or df.empty:
+        return None
+    try:
+        h = pd.util.hash_pandas_object(df.fillna("").astype(str), index=False).values.tobytes()
+        return hashlib.sha256(h).hexdigest()[:16]
+    except Exception:
+        return None
+
+
+def _audit_path():
+    return AGENT_DB_PARQUET.parent / "import_audit.jsonl"
+
+
+def _seen_hashes() -> set:
+    import json
+    out, p = set(), _audit_path()
+    if p.exists():
+        try:
+            for line in open(p, encoding="utf-8"):
+                try:
+                    h = json.loads(line).get("file_hash")
+                    if h:
+                        out.add(h)
+                except Exception:
+                    pass
+        except Exception:
+            pass
+    return out
+
+
+def _audit_log(entry: dict):
+    """Append-only import audit log: database/import_audit.jsonl."""
+    import json
+    try:
+        ensure_db_dir()
+        with open(_audit_path(), "a", encoding="utf-8") as f:
+            f.write(json.dumps(entry, ensure_ascii=False, default=str) + "\n")
+    except Exception:
+        pass
+
+
+def _quarantine_rows(incoming: pd.DataFrame, segment: str):
+    """Divert rows with non-positive payment or unparseable order date to
+    database/quarantine/ instead of absorbing them. Returns (good, n_bad, path)."""
+    if incoming is None or incoming.empty:
+        return incoming, 0, None
+    df = incoming
+    bad = pd.Series(False, index=df.index)
+    pay_col = next((c for c in ("实际支付", "售价") if c in df.columns), None)
+    if pay_col:
+        pay = pd.to_numeric(df[pay_col], errors="coerce")
+        bad = bad | (pay.notna() & (pay < 0))
+    for c in ("订单时间", "order_time"):
+        if c in df.columns:
+            bad = bad | pd.to_datetime(df[c], errors="coerce").isna()
+            break
+    n_bad = int(bad.sum())
+    path = None
+    if n_bad:
+        try:
+            qdir = AGENT_DB_PARQUET.parent / "quarantine"
+            qdir.mkdir(parents=True, exist_ok=True)
+            path = qdir / f"{segment}_{time.strftime('%Y%m%d_%H%M%S')}.csv"
+            df[bad].to_csv(path, index=False, encoding="utf-8-sig")
+        except Exception:
+            path = None
+    return df[~bad], n_bad, (str(path) if path else None)
+
+
+def _detect_restatements(existing, incoming, key_col=ORDER_ID_COL, watch=("订单状态", "实际支付")):
+    """Count existing orders whose watched value changes in the incoming batch."""
+    if (existing is None or existing.empty or incoming is None or incoming.empty
+            or key_col not in existing.columns or key_col not in incoming.columns):
+        return 0, []
+    cols = [key_col] + [c for c in watch if c in existing.columns and c in incoming.columns]
+    if len(cols) <= 1:
+        return 0, []
+    e = (existing[cols].dropna(subset=[key_col])
+         .drop_duplicates(subset=[key_col], keep="last").set_index(key_col))
+    i = (incoming[cols].dropna(subset=[key_col])
+         .drop_duplicates(subset=[key_col], keep="last").set_index(key_col))
+    common = e.index.intersection(i.index)
+    n, samples = 0, []
+    for k in common:
+        for c in cols[1:]:
+            ev, iv = str(e.at[k, c]), str(i.at[k, c])
+            if ev != iv:
+                n += 1
+                if len(samples) < 25:
+                    samples.append({"order_id": str(k), "field": c, "old": ev, "new": iv})
+                break
+    return n, samples
+
+
+def _hardened_append(incoming, segment, parquet_path, fallback_xlsx, rebuild_kw):
+    """Shared hardened import: dup-file guard + quarantine + restatement detection
+    + audit log around the read/append/write/rebuild flow."""
     ensure_db_dir()
     t0 = time.time()
+    rows_in = 0 if incoming is None else len(incoming)
     validation = _validate_incoming(incoming)
-    existing = _read_rolling(AGENT_DB_PARQUET, AGENT_DB)
+    fhash = _content_hash(incoming)
+    dup_file = bool(fhash and fhash in _seen_hashes())
+    incoming, n_quar, qpath = _quarantine_rows(incoming, segment.lower())
+    existing = _read_rolling(parquet_path, fallback_xlsx)
+    n_restate, restate_samples = _detect_restatements(existing, incoming)
     merged, added, dups = _append_dedup(existing, incoming)
-    _log(f"Agent: +{added} new, -{dups} duplicates, total {len(merged):,} rows")
-    _write_rolling(merged, AGENT_DB_PARQUET)
-    _log(f"{AGENT_DB_PARQUET.name} written")
-    rebuild_cache(agent_df=merged)
-    elapsed = time.time() - t0
-    return {
-        "segment": "Agent",
-        "added": added,
-        "duplicates": dups,
-        "total_rows": len(merged),
-        "elapsed_seconds": round(elapsed, 1),
-        **validation,
-    }
+    _log(f"{segment}: +{added} new, -{dups} dups, {n_quar} quarantined, "
+         f"{n_restate} restated{' [DUPLICATE FILE]' if dup_file else ''}, total {len(merged):,} rows")
+    _write_rolling(merged, parquet_path)
+    rebuild_cache(**rebuild_kw(merged))
+    elapsed = round(time.time() - t0, 1)
+    entry = {"ts": time.strftime('%Y-%m-%d %H:%M:%S'), "segment": segment,
+             "file_hash": fhash, "duplicate_file": dup_file, "rows_in": rows_in,
+             "added": added, "duplicates": dups, "quarantined": n_quar,
+             "quarantine_file": qpath, "restated": n_restate,
+             "restatement_samples": restate_samples, "total_rows": len(merged),
+             "elapsed_seconds": elapsed, **validation}
+    _audit_log(entry)
+    return {"segment": segment, "added": added, "duplicates": dups,
+            "total_rows": len(merged), "elapsed_seconds": elapsed,
+            "duplicate_file": dup_file, "quarantined": n_quar,
+            "quarantine_file": qpath, "restated": n_restate,
+            "restatement_samples": restate_samples[:5], **validation}
+
+
+def append_agent(incoming: pd.DataFrame) -> dict:
+    """Append a daily Agent batch (hardened: dup-file, quarantine, restatement, audit)."""
+    return _hardened_append(incoming, "Agent", AGENT_DB_PARQUET, AGENT_DB,
+                            lambda merged: {"agent_df": merged})
 
 
 def append_master(incoming: pd.DataFrame) -> dict:
-    """Append a daily Master batch. Returns a status dict."""
-    ensure_db_dir()
-    t0 = time.time()
-    validation = _validate_incoming(incoming)
-    existing = _read_rolling(MASTER_DB_PARQUET, MASTER_DB)
-    merged, added, dups = _append_dedup(existing, incoming)
-    _log(f"Master: +{added} new, -{dups} duplicates, total {len(merged):,} rows")
-    _write_rolling(merged, MASTER_DB_PARQUET)
-    _log(f"{MASTER_DB_PARQUET.name} written")
-    rebuild_cache(master_df=merged)
-    elapsed = time.time() - t0
-    return {
-        "segment": "Master",
-        "added": added,
-        "duplicates": dups,
-        "total_rows": len(merged),
-        "elapsed_seconds": round(elapsed, 1),
-        **validation,
-    }
+    """Append a daily Master batch (hardened: dup-file, quarantine, restatement, audit)."""
+    return _hardened_append(incoming, "Master", MASTER_DB_PARQUET, MASTER_DB,
+                            lambda merged: {"master_df": merged})
 
 
 def export_excel_backup(progress_callback=None) -> dict:

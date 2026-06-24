@@ -215,8 +215,57 @@ COUNTRY_CURRENCY: dict[str, tuple[str, str, float]] = {
 }
 
 
-def lookup(country: str | None):
-    """Return (symbol, iso_code, rmb_to_local_rate) for a country, or None."""
+RATES_AS_OF = "2025-06"   # effective month of the indicative snapshot above
+
+_DATED = None             # {country: [(YYYY-MM, rate), ...]} sorted; loaded lazily from CSV
+
+
+def _load_dated():
+    """Optional effective-dated FX overrides from ``database/fx_rates.csv``
+    (columns: country, month [YYYY-MM], rate). Empty dict if the file is absent.
+    Lets the team supply real per-month rates without code changes."""
+    global _DATED
+    if _DATED is not None:
+        return _DATED
+    import csv
+    from pathlib import Path
+    _DATED = {}
+    path = Path(__file__).parent / "database" / "fx_rates.csv"
+    if path.exists():
+        try:
+            with open(path, encoding="utf-8-sig", newline="") as f:
+                for row in csv.DictReader(f):
+                    ctry = (row.get("country") or "").strip()
+                    mon = (row.get("month") or "").strip()
+                    try:
+                        rate = float(row.get("rate"))
+                    except (TypeError, ValueError):
+                        continue
+                    if ctry and mon:
+                        _DATED.setdefault(ctry, []).append((mon, rate))
+            for k in _DATED:
+                _DATED[k].sort()
+        except Exception:
+            _DATED = {}
+    return _DATED
+
+
+def lookup(country: str | None, as_of: str | None = None):
+    """Return (symbol, iso_code, rmb_to_local_rate) for a country, or None.
+
+    If ``database/fx_rates.csv`` provides effective-dated rates and ``as_of``
+    (a 'YYYY-MM' string) is given, the rate effective on/before that month is
+    used; otherwise the indicative snapshot rate (see ``RATES_AS_OF``).
+    """
     if not country:
         return None
-    return COUNTRY_CURRENCY.get(str(country).strip())
+    base = COUNTRY_CURRENCY.get(str(country).strip())
+    if base is None:
+        return None
+    sym, iso, rate = base
+    if as_of:
+        dated = _load_dated().get(str(country).strip())
+        if dated:
+            eff = [r for (m, r) in dated if m <= as_of]
+            rate = eff[-1] if eff else dated[0][1]
+    return (sym, iso, rate)
