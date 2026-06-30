@@ -11,6 +11,7 @@ import db_utils
 from country_mapping import translate_country, CN_TO_EN
 import theme as T
 import charts
+import clean_raw
 import fx_rates
 import remarks_utils
 try:
@@ -1997,6 +1998,29 @@ app_ui = ui.page_sidebar(
                     "import_btn", "▶ Process & Append",
                     class_="refresh-btn",
                     style="margin-top: 8px; width: 100%;"
+                ),
+                ui.input_action_button(
+                    "clean_import_btn", "🧹 Clean & Import Daily Files",
+                    class_="refresh-btn",
+                    style="margin-top: 8px; width: 100%; background:#10B981!important; border-color:#10B981!important;"
+                ),
+                ui.tags.small(
+                    "Scans the Data/ folders (Master, Master-RM, Agent), cleans new daily CSVs "
+                    "(normalize columns · parse dates · fill missing) and appends them. "
+                    "Skips files already imported.",
+                    style="font-size:0.72em; color:rgba(255,255,255,0.82); display:block; margin-top:5px;"
+                ),
+                ui.input_action_button(
+                    "full_rebuild_btn", "♻️ Rebuild ALL from Data/ (raw)",
+                    class_="refresh-btn",
+                    style="margin-top: 14px; width: 100%; background:#7C3AED!important; border-color:#7C3AED!important;"
+                ),
+                ui.tags.small(
+                    "One-time full rebuild that makes Data/ the SOLE source: reads the history "
+                    "workbooks (all sheets) + every daily CSV, cleans them, and rebuilds the "
+                    "rolling stores + cache with correct text order IDs. Slow (reads the big xlsx "
+                    "once). Replaces the current database.",
+                    style="font-size:0.72em; color:rgba(255,255,255,0.82); display:block; margin-top:5px;"
                 ),
                 style="padding: 8px 4px;"
             ),
@@ -3999,6 +4023,54 @@ def server(input, output, session):
     # ------------------------------------------------------------------
     # Import Data section
     # ------------------------------------------------------------------
+    @reactive.Effect
+    @reactive.event(input.clean_import_btn)
+    def handle_clean_import():
+        """Clean & import new daily raw files from the Data/ folders (clean_raw.py)."""
+        import_message_rv.set("⏳ Scanning Data/ folders, cleaning new daily files, and appending…")
+        try:
+            res = clean_raw.import_new_daily(dry_run=False)
+        except Exception as exc:
+            import_message_rv.set(f"❌ Clean & Import failed: {exc}")
+            return
+        files = res.get("files", [])
+        cleaned = [f for f in files if "skipped" not in f and "error" not in f]
+        skipped = sum(1 for f in files if f.get("skipped"))
+        errors = [f for f in files if f.get("error")]
+        lines = [f"✅ Clean & Import done — {len(cleaned)} new file(s) cleaned, {skipped} already-imported skipped."]
+        for seg, st in res.get("import", {}).items():
+            if isinstance(st, dict):
+                lines.append(f"• {seg.title()}: +{st.get('added', 0):,} rows "
+                             f"(−{st.get('duplicates', 0):,} dup · {st.get('quarantined', 0)} quarantined · "
+                             f"{st.get('restated', 0)} restated)")
+        warn = [f for f in cleaned if f.get("date_dayfirst") or f.get("date_ambiguous")]
+        if warn:
+            lines.append("⚠ Check date format on: " + ", ".join(
+                f"{f['file']}" for f in warn[:5]) + " (day/month may be reversed)")
+        if errors:
+            lines.append("❌ " + "; ".join(f"{e['file']}: {str(e['error'])[:40]}" for e in errors[:3]))
+        import_message_rv.set("\n".join(lines))
+
+    @reactive.Effect
+    @reactive.event(input.full_rebuild_btn)
+    def handle_full_rebuild():
+        """Full rebuild from Data/ raw (history xlsx all sheets + every daily CSV)."""
+        import_message_rv.set(
+            "⏳ Full rebuild from Data/ — reading history workbooks (all sheets) + daily CSVs, "
+            "cleaning, and rebuilding stores + cache. This reads the big xlsx once and can take "
+            "several minutes…")
+        try:
+            res = clean_raw.full_rebuild_from_data(dry_run=False)
+        except Exception as exc:
+            import_message_rv.set(f"❌ Full rebuild failed: {exc}")
+            return
+        m, a = res.get("master", {}), res.get("agent", {})
+        lines = ["✅ Full rebuild from Data/ done — database now sourced entirely from Data/ raw.",
+                 f"• B2C (Master+RM): {m.get('rows', 0):,} rows · {m.get('date_min','?')} → {m.get('date_max','?')}",
+                 f"• B2B (Agent): {a.get('rows', 0):,} rows · {a.get('date_min','?')} → {a.get('date_max','?')}",
+                 "Order IDs are now full-precision text. Click 🔄 Refresh from Disk (or reload) to see it."]
+        import_message_rv.set("\n".join(lines))
+
     @reactive.Effect
     @reactive.event(input.import_btn)
     def handle_import():

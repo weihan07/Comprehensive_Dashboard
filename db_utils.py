@@ -159,13 +159,61 @@ def archive_upload(src_path, archive_dir: Path, original_name: str | None = None
 # Excel helpers
 # ---------------------------------------------------------------------------
 
+# Identifier columns must be read as TEXT — 18–19-digit order/payment numbers and
+# phone numbers lose precision (→ float, e.g. 2.026e+17) if pandas infers them as
+# numeric. Forcing dtype=str AT READ TIME preserves the full value (precision lost
+# during read can never be recovered afterward).
+_STR_COLS = [
+    "订单号", "接口商订单号", "充值号码", "useepay订单号", "订单ID", "unionid",
+    "区号", "批次号", "供应商ID", "供应商订单号", "支付订单号", "PIN码", "pin码",
+]
+_STR_DTYPE = {c: str for c in _STR_COLS}
+
+# Authoritative sheets in the Master/Agent source workbooks. Those workbooks also
+# carry leftover/duplicate sheets (old partitions, raw dumps, "Sheet1") whose rows
+# would double-count or mix a different schema, so the reader selects ONLY:
+#   • every sheet whose name starts with "Whole" — so an overflow sheet ("Whole 2",
+#     …) created when one hits Excel's 1,048,576-row limit is picked up automatically,
+#   • plus the explicit history sheets named below (add a line when you add a new one).
+_HISTORY_SHEETS = ["Jul - Dec 2025"]
+
+
+def _select_source_sheets(sheet_names) -> list:
+    """Authoritative sheets to read from a source workbook: any 'Whole*' sheet plus
+    the named history sheets. Empty → caller falls back to the first sheet."""
+    selected = []
+    for s in sheet_names:
+        name = str(s).strip()
+        if name.lower().startswith("whole") or name in _HISTORY_SHEETS:
+            selected.append(s)
+    return selected
+
+
 def _read_excel_any_sheet(path: Path) -> pd.DataFrame:
-    """Read the first sheet of an xlsx (preferring 'Whole' if present)."""
-    try:
-        return pd.read_excel(path, sheet_name="Whole")
-    except ValueError:
-        xls = pd.ExcelFile(path)
-        return pd.read_excel(xls, sheet_name=xls.sheet_names[0])
+    """Read the authoritative sheets of a source workbook and concatenate them.
+
+    Selects every 'Whole*' sheet (so data split across sheets past Excel's
+    1,048,576-row limit — 'Whole', 'Whole 2', … — is connected) plus the named
+    history sheets (``_HISTORY_SHEETS``), ignoring leftover/duplicate sheets.
+    Identifier columns are forced to text to avoid float-precision corruption, and
+    the union is de-duplicated by 订单号 (keep last) as a safety net so an overlap
+    between sheets never doubles a row. Falls back to the first sheet when no
+    authoritative sheet matches."""
+    xls = pd.ExcelFile(path)
+    sheets = _select_source_sheets(xls.sheet_names) or [xls.sheet_names[0]]
+    frames = []
+    for s in sheets:
+        df = pd.read_excel(xls, sheet_name=s, dtype=_STR_DTYPE)
+        if len(df):
+            frames.append(df)
+    if not frames:
+        return pd.DataFrame()
+    if len(frames) == 1:
+        return frames[0]
+    out = pd.concat(frames, ignore_index=True)
+    if "订单号" in out.columns:
+        out = out.drop_duplicates(subset=["订单号"], keep="last").reset_index(drop=True)
+    return out
 
 
 def _read_data_file(path) -> pd.DataFrame:
@@ -186,13 +234,15 @@ def _read_data_file(path) -> pd.DataFrame:
             try:
                 if sep is None:
                     # python engine sniffs the separator but doesn't support low_memory
-                    return pd.read_csv(path, encoding=enc, sep=None, engine="python")
-                return pd.read_csv(path, encoding=enc, low_memory=False, sep=sep)
+                    return pd.read_csv(path, encoding=enc, sep=None, engine="python",
+                                       dtype=_STR_DTYPE)
+                return pd.read_csv(path, encoding=enc, low_memory=False, sep=sep,
+                                   dtype=_STR_DTYPE)
             except (UnicodeDecodeError, UnicodeError):
                 continue
         # Last resort: silently replace bad bytes so we still get a frame
         return pd.read_csv(path, encoding="utf-8", sep=None, engine="python",
-                           encoding_errors="replace")
+                           encoding_errors="replace", dtype=_STR_DTYPE)
     raise ValueError(
         f"Unsupported file type: '{path.suffix}'. "
         "Please upload .xlsx, .xls, .xlsm, .csv, or .tsv."

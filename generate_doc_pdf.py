@@ -223,13 +223,154 @@ def _data_snapshot():
     return out
 
 
+# ── Visualizations (matplotlib → reportlab Image) ────────────────────────────
+
+def _fig_image(fig, width_mm=None, dpi=150):
+    """Render a matplotlib Figure to an aspect-preserved reportlab Image flowable."""
+    from reportlab.platypus import Image as RLImage
+    from reportlab.lib.utils import ImageReader
+    import matplotlib.pyplot as plt
+    buf = io.BytesIO()
+    fig.savefig(buf, format="png", dpi=dpi, bbox_inches="tight", facecolor="white")
+    plt.close(fig)
+    buf.seek(0)
+    iw, ih = ImageReader(buf).getSize()
+    buf.seek(0)
+    w = (width_mm * mm) if width_mm else INNER_W
+    return RLImage(buf, width=w, height=w * ih / iw)
+
+
+def _flow_diagram(steps, figsize=(11.0, 1.9), accent="#4F46E5"):
+    """Horizontal box-and-arrow flow. steps = [(label, sub), ...]."""
+    import matplotlib
+    matplotlib.use("Agg")
+    import matplotlib.pyplot as plt
+    from matplotlib.patches import FancyBboxPatch
+    fig, ax = plt.subplots(figsize=figsize)
+    ax.set_xlim(0, 10); ax.set_ylim(0, 2.5); ax.axis("off")
+    n = max(len(steps), 1)
+    span = 9.4 / n
+    bw = span - 0.34
+    for i, (label, sub) in enumerate(steps):
+        x = 0.3 + i * span
+        ax.add_patch(FancyBboxPatch((x, 0.8), bw, 1.05,
+                     boxstyle="round,pad=0.04,rounding_size=0.12",
+                     fc="#EEF0FF", ec=accent, lw=1.4))
+        ax.text(x + bw / 2, 1.52, label, ha="center", va="center",
+                fontsize=8.5, fontweight="bold", color="#0F172A")
+        if sub:
+            ax.text(x + bw / 2, 1.12, sub, ha="center", va="center",
+                    fontsize=6.2, color="#64748B")
+        if i < n - 1:
+            ax.annotate("", xy=(x + bw + 0.30, 1.32), xytext=(x + bw + 0.02, 1.32),
+                        arrowprops=dict(arrowstyle="-|>", color="#8B5CF6", lw=1.5))
+    return fig
+
+
+def _sample_charts():
+    """A few summary charts rendered from the live cache (充值成功 basis)."""
+    import matplotlib
+    matplotlib.use("Agg")
+    import matplotlib.pyplot as plt
+    import pandas as pd
+    imgs = []
+    p = Path(__file__).parent / "database" / "sales_cache.parquet"
+    try:
+        df = pd.read_parquet(p, columns=["order_time", "segment", "sales", "country", "order_status"])
+    except Exception:
+        return imgs
+    if "order_status" in df.columns:
+        df = df[df["order_status"].astype(str).str.strip() == "充值成功"]
+    df = df[pd.to_numeric(df["sales"], errors="coerce").notna()]
+
+    def _despine(ax):
+        for s in ("top", "right"):
+            ax.spines[s].set_visible(False)
+        ax.tick_params(labelsize=6)
+
+    try:   # 1 · Monthly GMV
+        mon = (df.assign(m=pd.to_datetime(df["order_time"], errors="coerce").dt.to_period("M").astype(str))
+                 .groupby("m")["sales"].sum())
+        mon = mon[mon.index != "NaT"].tail(8)
+        fig, ax = plt.subplots(figsize=(4.6, 2.5))
+        ax.bar(range(len(mon)), mon.values / 1e6, color="#4F46E5")
+        ax.set_xticks(range(len(mon)))
+        ax.set_xticklabels(mon.index, rotation=45, fontsize=6, ha="right")
+        ax.set_title("Monthly GMV (RMB M)", fontsize=9, color="#0F172A")
+        _despine(ax)
+        imgs.append(_fig_image(fig, width_mm=86))
+    except Exception:
+        pass
+    try:   # 2 · Segment split
+        seg = df.groupby("segment")["sales"].sum()
+        fig, ax = plt.subplots(figsize=(4.6, 2.5))
+        ax.pie(seg.values, labels=list(seg.index), autopct="%1.0f%%",
+               colors=["#4F46E5", "#10B981"], textprops={"fontsize": 8},
+               wedgeprops={"width": 0.45})
+        ax.set_title("GMV by segment", fontsize=9, color="#0F172A")
+        imgs.append(_fig_image(fig, width_mm=86))
+    except Exception:
+        pass
+    try:   # 3 · Top markets
+        top = df.groupby("country")["sales"].sum().nlargest(8).sort_values()
+        fig, ax = plt.subplots(figsize=(4.6, 2.5))
+        ax.barh(range(len(top)), top.values / 1e6, color="#8B5CF6")
+        ax.set_yticks(range(len(top)))
+        ax.set_yticklabels(list(top.index), fontsize=6)
+        ax.set_title("Top markets GMV (RMB M)", fontsize=9, color="#0F172A")
+        _despine(ax)
+        imgs.append(_fig_image(fig, width_mm=86))
+    except Exception:
+        pass
+    return imgs
+
+
+def _viz_block():
+    """Flowables: architecture + pipeline diagrams + live-data charts."""
+    out = []
+    arch = _flow_diagram([
+        ("Raw exports", "Master/Agent CSV"),
+        ("db_utils", "clean - dedup - audit"),
+        ("Cache", "sales_cache.parquet"),
+        ("Shiny server", "reactive filters"),
+        ("12 tabs", "charts - KPIs - PDF"),
+    ])
+    out += [_sub("Architecture — raw data to dashboard"), _fig_image(arch),
+            Paragraph("Raw daily exports are cleaned &amp; deduplicated by db_utils into one parquet "
+                      "cache, loaded once by the Shiny server, then sliced reactively across the 12 "
+                      "analysis tabs.", CAPTION), Spacer(INNER_W, 3 * mm)]
+    pipe = _flow_diagram([
+        ("Download", "daily CSV"),
+        ("Validate", "schema - dates"),
+        ("Quarantine", "bad rows out"),
+        ("Append+dedup", "by order_id"),
+        ("Rebuild cache", "to parquet"),
+        ("Load", "in-memory"),
+    ], accent="#10B981")
+    out += [_sub("Import pipeline (hardened)"), _fig_image(pipe),
+            Paragraph("Each daily file is content-hashed (dup-file guard), validated, bad rows "
+                      "quarantined, appended with order-id dedup + restatement logging, then the cache "
+                      "is rebuilt — every step recorded in import_audit.jsonl.", CAPTION),
+            Spacer(INNER_W, 3 * mm)]
+    charts = _sample_charts()
+    if charts:
+        row = [c for c in charts[:3]]
+        while len(row) < 3:
+            row.append("")
+        t = Table([row], colWidths=[INNER_W / 3] * 3)
+        t.setStyle(TableStyle([("VALIGN", (0, 0), (-1, -1), "TOP"),
+                               ("ALIGN", (0, 0), (-1, -1), "CENTER")]))
+        out += [_sub("Live data snapshot (充值成功 basis)"), t]
+    return out
+
+
 # ── Build story ───────────────────────────────────────────────────────────────
 
 def build_doc_pdf() -> bytes:
     buf = io.BytesIO()
     generated = datetime.now().strftime("%Y-%m-%d %H:%M")
     doc_title = "Global Mobile Recharge — Revenue Intelligence Dashboard"
-    section_label = "System Documentation · v6"
+    section_label = "System Documentation · v7"
 
     hf = _make_hf(doc_title, section_label)
     frame = Frame(MARGIN, 12 * mm, INNER_W, PAGE_H - 14 * mm - 14 * mm,
@@ -270,17 +411,25 @@ def build_doc_pdf() -> bytes:
             ("Location", r"C:\Disk\LiuLian Tech Sdn. Bhd\Code\Sales Dashboard"),
         ], col_widths=[55 * mm, INNER_W - 55 * mm]),
         Spacer(INNER_W, 8 * mm),
-        _sm("Contents: 1 System Overview · 2 Data Sources & Schema · 3 Data Pipeline · "
-            "4 Business Rules & Calculations · 5 Dashboard Structure (10 tabs) · "
+        _sm("Contents: Visual Overview · 1 System Overview · 2 Data Sources & Schema · 3 Data Pipeline · "
+            "4 Business Rules & Calculations · 5 Dashboard Structure (12 tabs) · "
             "6 Filters, UX & Language · 7 AI / ML Models · 8 Reliability & Error Handling · "
             "9 Operations Runbook · 10 Known Caveats & Data-Quality Asks · Appendix: Glossary"),
         PageBreak(),
     ]
 
+    # ════════════════════ VISUAL OVERVIEW ════════════════════
+    story += _section_header("Visual Overview — Architecture, Pipeline & Live Data")
+    try:
+        story += _viz_block()
+    except Exception as exc:
+        story += [_sm(f"(Visual overview skipped: {exc})")]
+    story += [PageBreak()]
+
     # ════════════════════ 1. SYSTEM OVERVIEW ════════════════════
     story += _section_header("1 · System Overview")
     story += [
-        _p("A 10-tab business-intelligence web application for a global mobile-recharge "
+        _p("A 12-tab business-intelligence web application for a global mobile-recharge "
            "platform, covering revenue (GMV), order quality, markets, operators/suppliers, "
            "products and denominations, customers, marketing promotions, and ML forecasts. "
            "It serves both <b>B2B (agent/reseller)</b> and <b>B2C (consumer app)</b> order data."),
@@ -496,7 +645,7 @@ def build_doc_pdf() -> bytes:
     ]
 
     # ════════════════════ 5. DASHBOARD STRUCTURE ════════════════════
-    story += _section_header("5 · Dashboard Structure — 10 Tabs, Every Visualization")
+    story += _section_header("5 · Dashboard Structure — 12 Tabs, Every Visualization")
 
     def tab_block(no, name, zh, desc, visuals):
         return [
