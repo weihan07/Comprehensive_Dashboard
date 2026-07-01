@@ -12,6 +12,7 @@ from country_mapping import translate_country, CN_TO_EN
 import theme as T
 import charts
 import clean_raw
+import categories
 import fx_rates
 import remarks_utils
 try:
@@ -415,12 +416,63 @@ shiny-data-frame tbody tr:hover td { background: #F6F8FE; }
 .supplier-icon  { background: #F0F9FF; color: #0284C7; }
 
 .filter-section {
-    background-color: rgba(255, 255, 255, 0.08);
-    padding: 14px;
-    margin: 10px 0;
-    border-radius: 10px;
+    background-color: rgba(255, 255, 255, 0.07);
+    padding: 13px 14px;
+    margin: 9px 0;
+    border-radius: 12px;
     border: 1px solid rgba(255, 255, 255, 0.08);
+    border-left: 3px solid rgba(255, 255, 255, 0.12);
+    transition: background-color .18s ease, border-color .18s ease, transform .18s ease, box-shadow .18s ease;
 }
+.filter-section:hover {
+    background-color: rgba(255, 255, 255, 0.11);
+    border-left-color: rgba(255, 255, 255, 0.45);
+    transform: translateY(-1px);
+    box-shadow: 0 6px 18px rgba(0, 0, 0, 0.14);
+}
+/* Highlight the section the user is actively editing */
+.filter-section:focus-within {
+    background-color: rgba(255, 255, 255, 0.13);
+    border-left-color: #FFFFFF;
+}
+.filter-section h4 { margin-bottom: 9px; }
+
+/* Smooth control transitions + selectize dropdown animation */
+.sidebar select, .sidebar input, .sidebar .selectize-input,
+.sidebar .btn, .sidebar textarea {
+    transition: box-shadow .16s ease, background-color .16s ease, border-color .16s ease !important;
+}
+.selectize-dropdown {
+    animation: sbFade .14s ease;
+    border-radius: 10px !important;
+    box-shadow: 0 10px 28px rgba(0, 0, 0, 0.22) !important;
+    overflow: hidden;
+}
+@keyframes sbFade { from { opacity: 0; transform: translateY(-4px); } to { opacity: 1; transform: translateY(0); } }
+
+/* Data Management collapsible summary */
+.sb-admin-summary {
+    cursor: pointer;
+    font-weight: 700;
+    padding: 10px 12px;
+    background: rgba(255, 255, 255, 0.14);
+    color: #ffffff;
+    border-radius: 10px;
+    margin-top: 14px;
+    user-select: none;
+    list-style: none;
+    letter-spacing: 0.02em;
+    transition: background-color .18s ease;
+}
+.sb-admin-summary:hover { background: rgba(255, 255, 255, 0.24); }
+details[open] > .sb-admin-summary { border-radius: 10px 10px 0 0; }
+
+/* Sidebar: smooth scrolling + slim custom scrollbar */
+.sidebar { scroll-behavior: smooth; scrollbar-width: thin; scrollbar-color: rgba(255,255,255,0.35) transparent; }
+.sidebar::-webkit-scrollbar { width: 8px; }
+.sidebar::-webkit-scrollbar-thumb { background: rgba(255,255,255,0.30); border-radius: 8px; }
+.sidebar::-webkit-scrollbar-thumb:hover { background: rgba(255,255,255,0.5); }
+.sidebar::-webkit-scrollbar-track { background: transparent; }
 
 .stats-grid {
     display: grid;
@@ -1789,6 +1841,19 @@ app_ui = ui.page_sidebar(
         ),
 
         ui.div(
+            ui.output_ui("label_category"),
+            ui.input_select(
+                "category_top", None,
+                choices={"All": "All · 全部",
+                         **{t: f"{categories.label(t, 'en')} · {t}"
+                            for t in categories.TOP_CATEGORIES}},
+                selected="All"
+            ),
+            ui.output_ui("category_sub_ui"),
+            class_="filter-section"
+        ),
+
+        ui.div(
             ui.output_ui("label_currency"),
             ui.input_radio_buttons("currency", None, choices=currency_choices, selected="RMB"),
             ui.tags.small(
@@ -1811,7 +1876,8 @@ app_ui = ui.page_sidebar(
             ui.input_select(
                 "quick_period",
                 "Quick Period:",
-                choices=["—", "Today", "Yesterday", "Past 7 Days", "This Month", "This Year", "All Time"],
+                choices=["—", "Today", "Yesterday", "Past 7 Days", "This Month",
+                         "Last Month", "Last 3 Months", "This Year", "All Time"],
                 selected="—"
             ),
             ui.input_select("from_month", "From Month", choices=month_choices, selected="—"),
@@ -1889,84 +1955,37 @@ app_ui = ui.page_sidebar(
         ),
 
         ui.hr(),
-        ui.p("💡 Tip: pick your Customer Segment / Region / Market / Currency / Dates above, then press Enter to apply.",
+        ui.p("💡 Tip: pick your Customer Segment / Region / Market / Category / Currency / Dates above, then press Enter to apply.",
              style="font-size: 0.78em;"),
 
-        # ---- Quick refresh: re-read the parquet (fast, ~0.5s) ------------
-        ui.div(
-            ui.tags.label("Dashboard not showing latest data?",
-                          style="font-weight:700; color: white; display:block; margin-bottom:4px;"),
-            ui.p("Refresh Cache: re-reads the parquet cache file. Use this when the data pipeline "
-                 "was rebuilt outside the dashboard.",
-                 style="font-size: 0.72em; color: rgba(255,255,255,0.85); margin: 0 0 8px 0;"),
-            ui.input_action_button(
-                "refresh_disk_btn", "🔃 Refresh Cache",
-                class_="refresh-btn",
-                style="width: 100%;"
-            ),
-            ui.p("⚡ Instant (<1 second). Does not re-process source xlsx files.",
-                 style="font-size: 0.70em; color: rgba(255,255,255,0.65); margin: 6px 0 0 0;"),
-            style="margin-top: 14px; padding: 10px 12px; background: rgba(255,255,255,0.10); border-radius: 8px;"
-        ),
-
-        # ---- Reload from source xlsx (heavy: rebuilds DB from source) ----
-        ui.div(
-            ui.tags.label("Updated the source data files?",
-                          style="font-weight:700; color: white; display:block; margin-bottom:4px;"),
-            ui.p("Rebuild Data Pipeline: re-reads Master Data.xlsx + Agent Data.xlsx 'Whole' sheets "
-                 "and rebuilds the entire database from source.",
-                 style="font-size: 0.72em; color: rgba(255,255,255,0.85); margin: 0 0 8px 0;"),
-            ui.input_action_button(
-                "reload_source_btn", "🔄 Rebuild Data Pipeline",
-                class_="refresh-btn",
-                style="width: 100%;"
-            ),
-            ui.p("⚠ Takes 10–25 minutes. Overwrites the rolling database "
-                 "files — any prior daily imports not in the source xlsx will be replaced.",
-                 style="font-size: 0.70em; color: rgba(255,255,255,0.65); margin: 6px 0 0 0;"),
-            style="margin-top: 10px; padding: 10px 12px; background: rgba(255,255,255,0.10); border-radius: 8px;"
-        ),
-
-        # ---- Export the rolling stores back to human-readable Excel -------
-        ui.div(
-            ui.tags.label("Need the Excel backup files?",
-                          style="font-weight:700; color: white; display:block; margin-bottom:4px;"),
-            ui.p("Daily imports now save to fast parquet stores. Click below to "
-                 "rewrite Agent_Database.xlsx / Master_Database.xlsx from them.",
-                 style="font-size: 0.72em; color: rgba(255,255,255,0.85); margin: 0 0 8px 0;"),
-            ui.input_action_button(
-                "export_excel_btn", "💾 Export Excel Backup",
-                class_="refresh-btn",
-                style="width: 100%;"
-            ),
-            ui.p("Takes a few minutes for 1M+ rows. Only needed when you want "
-                 "to open the rolling database in Excel.",
-                 style="font-size: 0.70em; color: rgba(255,255,255,0.65); margin: 6px 0 0 0;"),
-            style="margin-top: 10px; padding: 10px 12px; background: rgba(255,255,255,0.10); border-radius: 8px;"
-        ),
-
-        # ---- Shared status panel (shows latest result of Import or Reload) ---
-        ui.div(
-            ui.output_ui("import_status_ui"),
-            style=("background: rgba(0,0,0,0.18); padding: 10px;"
-                   "border-radius: 6px; margin-top: 10px;"
-                   "font-size: 0.78em; color: white; max-height: 240px;"
-                   "overflow-y: auto;")
-        ),
-
-        # ---- Daily-file Import (collapsible — used less often) ----------
+        # ---- Data Management (collapsible: rebuild + daily import) -------
         ui.tags.details(
             ui.tags.summary(
-                "📥 Import Daily Data",
-                style=("cursor: pointer; font-weight: 600; padding: 10px 12px;"
-                       "background: rgba(255,255,255,0.18); color: white;"
-                       "border-radius: 8px; margin-top: 12px; user-select: none;"
-                       "list-style: none;")
+                ui.tags.span("⚙ Data Management", class_="lang-en"),
+                ui.tags.span("⚙ 数据管理", class_="lang-zh"),
+                class_="sb-admin-summary",
             ),
             ui.div(
+                # Rebuild from source xlsx (Whole + history sheets)
+                ui.tags.label(
+                    ui.tags.span("Updated the source data files?", class_="lang-en"),
+                    ui.tags.span("更新了源数据文件？", class_="lang-zh"),
+                    style="font-weight:700; color: white; display:block; margin-bottom:4px;"),
+                ui.p("Rebuild Data Pipeline: re-reads Master Data.xlsx + Agent Data.xlsx "
+                     "(Whole + history sheets) and rebuilds the entire database from source.",
+                     style="font-size: 0.72em; color: rgba(255,255,255,0.85); margin: 0 0 8px 0;"),
+                ui.input_action_button(
+                    "reload_source_btn", "🔄 Rebuild Data Pipeline",
+                    class_="refresh-btn", style="width: 100%;"
+                ),
+                ui.p("⚠ Takes 10–25 minutes. Overwrites the rolling database files.",
+                     style="font-size: 0.70em; color: rgba(255,255,255,0.65); margin: 6px 0 0 0;"),
+
+                ui.hr(style="border-color: rgba(255,255,255,0.15); margin: 14px 0;"),
+
+                # Daily-file import
                 ui.p("Upload daily Master and/or Agent xlsx/csv. Duplicate orders "
-                     "auto-skipped. Each uploaded file is also copied to its dedicated "
-                     "archive folder for audit.",
+                     "auto-skipped. Each uploaded file is archived for audit.",
                      style="font-size: 0.78em; color: rgba(255,255,255,0.85); margin: 8px 0;"),
                 ui.tags.details(
                     ui.tags.summary("📁 Archive locations",
@@ -2022,8 +2041,18 @@ app_ui = ui.page_sidebar(
                     "once). Replaces the current database.",
                     style="font-size:0.72em; color:rgba(255,255,255,0.82); display:block; margin-top:5px;"
                 ),
+
+                # Shared status panel (latest result of Import / Rebuild)
+                ui.div(
+                    ui.output_ui("import_status_ui"),
+                    style=("background: rgba(0,0,0,0.18); padding: 10px;"
+                           "border-radius: 6px; margin-top: 12px;"
+                           "font-size: 0.78em; color: white; max-height: 240px;"
+                           "overflow-y: auto;")
+                ),
                 style="padding: 8px 4px;"
             ),
+            style="margin-top: 12px;"
         ),
         class_="sidebar"
     ),
@@ -3624,6 +3653,8 @@ def server(input, output, session):
     applied_order_status = reactive.Value("Successful")
     applied_region = reactive.Value("All")
     applied_country = reactive.Value("All")
+    applied_category_top = reactive.Value("All")
+    applied_category_subs = reactive.Value([])
     applied_currency = reactive.Value("RMB")
     applied_trend_period = reactive.Value("Daily")
     applied_date_from = reactive.Value(session_min_date)
@@ -3661,6 +3692,15 @@ def server(input, output, session):
         applied_order_status.set(input.order_status_f() or "Successful")
         applied_region.set(input.region() or "All")
         applied_country.set(input.country() or "All")
+        _cat_top = input.category_top() or "All"
+        applied_category_top.set(_cat_top)
+        _cat_subs = []
+        if _cat_top != "All":
+            try:
+                _cat_subs = list(input.category_sub() or [])
+            except Exception:
+                _cat_subs = []
+        applied_category_subs.set(_cat_subs)
         applied_currency.set(input.currency() or "RMB")
         applied_trend_period.set(input.trend_period() or "Daily")
         applied_date_from.set(input.date_from())
@@ -3680,6 +3720,7 @@ def server(input, output, session):
             "order_status": "Order Status",
             "region":       "Region / Continent",
             "country":      "Market (Country)",
+            "category":     "Product Category",
             "currency":     "Reporting Currency",
             "trend_period": "Reporting Period",
             "date_range":   "Date Range",
@@ -3689,6 +3730,7 @@ def server(input, output, session):
             "order_status": "订单状态",
             "region":       "地区 / 洲",
             "country":      "市场（国家）",
+            "category":     "商品分类",
             "currency":     "报告货币",
             "trend_period": "报告周期",
             "date_range":   "日期范围",
@@ -3740,6 +3782,32 @@ def server(input, output, session):
     @safe_render
     def label_country():
         return ui.h4(_L("country"), style="margin-top:0;")
+
+    @render.ui
+    @safe_render
+    def label_category():
+        return ui.h4(_L("category"), style="margin-top:0;")
+
+    @render.ui
+    @safe_render
+    def category_sub_ui():
+        """Subcategory multi-select, driven by the chosen top category.
+        Empty selection = the whole top group. Hidden when top = All."""
+        top = input.category_top() or "All"
+        if top == "All":
+            return ui.tags.small(
+                ui.tags.span("Pick a category to narrow by subcategory (optional).", class_="lang-en"),
+                ui.tags.span("选择大类后可再按子分类筛选（可选）。", class_="lang-zh"),
+                style="display:block; font-size:0.72em; color:rgba(255,255,255,0.7); margin-top:4px;"
+            )
+        zh = _is_zh()
+        sub_choices = {s: categories.label(s, "zh" if zh else "en")
+                       for s in categories.subcategories(top)}
+        return ui.input_selectize(
+            "category_sub", None,
+            choices=sub_choices, selected=[], multiple=True,
+            options={"placeholder": ("全部子分类" if zh else "All subcategories")},
+        )
 
     @render.ui
     @safe_render
@@ -4000,6 +4068,9 @@ def server(input, output, session):
         applied_segment.set("All")
         applied_region.set("All")
         applied_country.set("All")
+        applied_category_top.set("All")
+        applied_category_subs.set([])
+        ui.update_select("category_top", selected="All", session=session)
 
         if 'order_time' in new_data.columns and not new_data['order_time'].isna().all():
             new_min = new_data['order_time'].min().date()
@@ -4064,11 +4135,20 @@ def server(input, output, session):
         except Exception as exc:
             import_message_rv.set(f"❌ Full rebuild failed: {exc}")
             return
+        # Auto-reload the freshly-rebuilt data into the live dashboard.
+        try:
+            new_data = load_data()
+            data_rv.set(new_data)
+            _refresh_filter_choices(new_data)
+            import_summary_rv.set(db_utils.import_status())
+        except Exception as exc:
+            import_message_rv.set(f"⚠ Rebuild done but auto-reload failed: {exc}")
+            return
         m, a = res.get("master", {}), res.get("agent", {})
         lines = ["✅ Full rebuild from Data/ done — database now sourced entirely from Data/ raw.",
                  f"• B2C (Master+RM): {m.get('rows', 0):,} rows · {m.get('date_min','?')} → {m.get('date_max','?')}",
                  f"• B2B (Agent): {a.get('rows', 0):,} rows · {a.get('date_min','?')} → {a.get('date_max','?')}",
-                 "Order IDs are now full-precision text. Click 🔄 Refresh from Disk (or reload) to see it."]
+                 "Order IDs are now full-precision text. Dashboard reloaded automatically."]
         import_message_rv.set("\n".join(lines))
 
     @reactive.Effect
@@ -4149,29 +4229,6 @@ def server(input, output, session):
             import_message_rv.set(f"❌ Import failed: {exc}")
 
     # ------------------------------------------------------------------
-    # Quick refresh from disk (re-read parquet, <1s)
-    # ------------------------------------------------------------------
-    @reactive.Effect
-    @reactive.event(input.refresh_disk_btn, ignore_init=True)
-    def handle_refresh_disk():
-        try:
-            t0 = _dt.datetime.now()
-            new_data = load_data()
-            data_rv.set(new_data)
-            _refresh_filter_choices(new_data)
-            import_summary_rv.set(db_utils.import_status())
-            elapsed = (_dt.datetime.now() - t0).total_seconds()
-            max_dt = new_data['order_time'].max() if 'order_time' in new_data.columns else None
-            max_dt_str = max_dt.strftime('%Y-%m-%d %H:%M') if max_dt is not None else "—"
-            import_message_rv.set(
-                f"✅ Refreshed from disk at {_dt.datetime.now().strftime('%H:%M:%S')}\n"
-                f"   {len(new_data):,} rows loaded ({elapsed:.1f}s)\n"
-                f"   Latest order_time: {max_dt_str}"
-            )
-        except Exception as exc:
-            import_message_rv.set(f"❌ Refresh from disk failed: {exc}")
-
-    # ------------------------------------------------------------------
     # Reload from source xlsx (Master Data.xlsx + Agent Data.xlsx)
     # ------------------------------------------------------------------
     @reactive.Effect
@@ -4227,24 +4284,6 @@ def server(input, output, session):
             )
         except Exception as exc:
             import_message_rv.set(f"❌ Reload failed: {exc}")
-
-    @reactive.Effect
-    @reactive.event(input.export_excel_btn, ignore_init=True)
-    def handle_export_excel():
-        try:
-            import_message_rv.set(
-                "⏳ Writing Excel backup files from the rolling parquet stores...\n"
-                "This can take a few minutes for 1M+ rows."
-            )
-            r = db_utils.export_excel_backup()
-            import_message_rv.set(
-                f"✅ Excel backups written at {_dt.datetime.now().strftime('%H:%M:%S')}\n"
-                f"   Agent_Database.xlsx: {r['agent_rows']:,} rows\n"
-                f"   Master_Database.xlsx: {r['master_rows']:,} rows\n"
-                f"   ⏱ {r['elapsed_sec']}s"
-            )
-        except Exception as exc:
-            import_message_rv.set(f"❌ Excel export failed: {exc}")
 
     @render.ui
     @safe_render
@@ -4346,6 +4385,16 @@ def server(input, output, session):
         elif qp == "This Month":
             end = max_d
             start = max_d.replace(day=1)
+        elif qp == "Last Month":
+            # Previous full calendar month.
+            end = max_d.replace(day=1) - timedelta(days=1)   # last day of prev month
+            start = end.replace(day=1)
+        elif qp == "Last 3 Months":
+            # The 3 full calendar months before the current one.
+            end = max_d.replace(day=1) - timedelta(days=1)   # last day of prev month
+            start = end.replace(day=1)
+            for _ in range(2):                               # step back 2 more months
+                start = (start - timedelta(days=1)).replace(day=1)
         elif qp == "This Year":
             end = max_d
             start = max_d.replace(month=1, day=1)
@@ -4355,19 +4404,37 @@ def server(input, output, session):
         else:
             return
 
+        # Clamp to the available data range (Last 3 Months may reach past it).
+        if min_d:
+            start = max(start, min_d)
+        if max_d:
+            end = min(end, max_d)
+
         # Clear the month picker so it doesn't visually conflict.
         ui.update_select("from_month", selected="—", session=session)
         ui.update_select("to_month", selected="—", session=session)
         _programmatic_range_update.set(True)
         ui.update_date("date_from", value=start, session=session)
         ui.update_date("date_to",   value=end,   session=session)
-    
+
+    def _apply_category_or_exclusions(df):
+        """Apply the sidebar product-category filter. When a top category is
+        chosen, keep exactly its mapped 商品分类 values (an explicit choice
+        overrides the China-team 电子钱包/Touch'n Go exclusion). When it's
+        'All', fall back to the default global exclusion."""
+        top = applied_category_top()
+        if top and top != "All" and 'product_category' in df.columns:
+            keep = categories.raw_values(top, applied_category_subs())
+            return df[df['product_category'].astype(str).str.strip().isin(keep)]
+        return _apply_global_exclusions(df)
+
     @reactive.Calc
     def filtered_base_calc():
-        """Segment/region/country/date filters — WITHOUT the order-status
+        """Segment/region/country/category/date filters — WITHOUT the order-status
         filter, so the Order Status analytics section can still see
-        refunded/cancelled orders. Core metrics drop 电子钱包 / Touch'n Go."""
-        df = _apply_global_exclusions(data_rv().copy())
+        refunded/cancelled orders. Core metrics drop 电子钱包 / Touch'n Go unless
+        a category is explicitly selected."""
+        df = _apply_category_or_exclusions(data_rv().copy())
         segment = applied_segment()
         region = applied_region() if 'region' in df.columns else None
         country = applied_country()
@@ -4400,7 +4467,7 @@ def server(input, output, session):
     
     @reactive.Calc
     def previous_period_base():
-        df = _apply_global_exclusions(data_rv().copy())
+        df = _apply_category_or_exclusions(data_rv().copy())
         segment = applied_segment()
         region = applied_region() if 'region' in df.columns else None
         country = applied_country()
@@ -7324,7 +7391,7 @@ def server(input, output, session):
     def fulfillment_kpis():
         df = filtered_base_calc()   # all statuses — gaps matter most on 'successful'
         if 'interface_order_id' not in df.columns:
-            return _no_data("Supplier order-id data (接口商订单号) not loaded — click 'Refresh Cache' in the sidebar.")
+            return _no_data("Supplier order-id data (接口商订单号) not loaded — run '🔄 Rebuild Data Pipeline' in the sidebar (Data Management).")
         d = df.copy()
         iface = d['interface_order_id'].astype('string').str.strip()
         _null_like = {"", "--", "-", "nan", "none", "null", "n/a"}
@@ -7452,7 +7519,7 @@ def server(input, output, session):
         out = _settlement_audit_data()
         if out.empty:
             return render.DataGrid(pd.DataFrame(
-                {'Status': ['Settlement data not available — click Refresh Cache in the sidebar.']}))
+                {'Status': ['Settlement data not available — run 🔄 Rebuild Data Pipeline in the sidebar (Data Management).']}))
         return render.DataGrid(_tdf(out.head(80)), filters=True)
 
     @render.download(filename=lambda: _make_filename("settlement_currency_audit", "xlsx"))
@@ -7580,7 +7647,7 @@ def server(input, output, session):
     def destination_market_chart():
         d = _destination_frame()
         if d is None:
-            return _no_data("Destination calling-code data (区号) not loaded — click 'Refresh Cache' in the sidebar.")
+            return _no_data("Destination calling-code data (区号) not loaded — run '🔄 Rebuild Data Pipeline' in the sidebar (Data Management).")
         currency = currency_converter()
         rate, sym = currency['rate'], currency['symbol']
         grp = d.groupby('dest_country', observed=True)
@@ -7655,7 +7722,7 @@ def server(input, output, session):
     def beneficiary_analysis():
         df = filtered_data()
         if 'recharge_number' not in df.columns:
-            return _no_data("Recharge-number data (充值号码) not loaded — click 'Refresh Cache' in the sidebar.")
+            return _no_data("Recharge-number data (充值号码) not loaded — run '🔄 Rebuild Data Pipeline' in the sidebar (Data Management).")
         d = df[df['recharge_number'].notna()].copy()
         if d.empty:
             return _no_data("No recharge numbers in the current selection.")
@@ -9752,7 +9819,7 @@ def server(input, output, session):
     def marketing_kpis():
         d = _promo_frame()
         if d is None:
-            return _no_data("Coupon data (是否使用优惠券) not loaded — click 'Refresh Cache' in the sidebar.")
+            return _no_data("Coupon data (是否使用优惠券) not loaded — run '🔄 Rebuild Data Pipeline' in the sidebar (Data Management).")
         currency = currency_converter()
         rate, sym = currency['rate'], currency['symbol']
         total_orders = d['order_id'].nunique() if 'order_id' in d.columns else len(d)
