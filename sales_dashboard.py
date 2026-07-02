@@ -309,6 +309,29 @@ body {
     box-shadow: var(--shadow-md);
 }
 
+/* ---- Boss-view composition: pair charts side-by-side on wide screens ---- */
+.chart-row {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 16px;
+    align-items: stretch;
+    margin: 12px 8px;
+}
+.chart-row.r21 { grid-template-columns: 2fr 1fr; }
+.chart-row > .chart-container { margin: 0; min-width: 0; }
+.chart-row .plotly-graph-div { max-width: 100% !important; }
+@media (max-width: 1200px) {
+    .chart-row, .chart-row.r21 { grid-template-columns: 1fr; }
+}
+
+/* ---- Print: Boss tab prints as a clean one-page snapshot ---- */
+@media print {
+    .sidebar, aside.sidebar, .bslib-sidebar-layout > .collapse-toggle,
+    .nav-tabs, .nav, #sb-pin-btn { display: none !important; }
+    .chart-container, .chart-row > .chart-container { box-shadow: none; border: 1px solid #CBD5E1; }
+    body { background: white !important; }
+}
+
 .chart-container h3 {
     color: var(--ink);
     border-bottom: 1px solid #EEF1F7;
@@ -733,6 +756,48 @@ SIDEBAR_UX_JS = """
 
 
 # JS that wires the overlay to the Reload button. Injected once in head.
+# ── Click-to-drill bridge ────────────────────────────────────────────────────
+# Charts whose figure carries layout.meta.drill = 'country' | 'segment' become
+# clickable: clicking a bar/slice sends {dim, value} to the Shiny input
+# 'chart_drill', which applies (or toggles off) the matching sidebar filter.
+# A MutationObserver re-binds after every re-render; binding is idempotent.
+CHART_DRILL_JS = """
+(function() {
+    function bindDrill() {
+        document.querySelectorAll('.plotly-graph-div').forEach(function(gd) {
+            if (gd.__drillBound) return;
+            var meta = gd.layout && gd.layout.meta;
+            var dim = meta && meta.drill;
+            if (!dim || typeof gd.on !== 'function') return;
+            gd.__drillBound = true;
+            gd.style.cursor = 'pointer';
+            gd.on('plotly_click', function(ev) {
+                if (!ev || !ev.points || !ev.points.length) return;
+                var p = ev.points[0];
+                var value = null;
+                if (p.data && p.data.type === 'pie') { value = p.label; }
+                else if (p.data && p.data.orientation === 'h') { value = p.y; }
+                else { value = p.x; }
+                if (value === null || value === undefined) return;
+                if (window.Shiny && Shiny.setInputValue) {
+                    Shiny.setInputValue('chart_drill',
+                        {dim: dim, value: String(value), nonce: Date.now()});
+                }
+            });
+        });
+    }
+    function init() {
+        new MutationObserver(function() { setTimeout(bindDrill, 200); })
+            .observe(document.body, {childList: true, subtree: true});
+        setInterval(bindDrill, 2500);   // safety net (binding is idempotent + cheap)
+        setTimeout(bindDrill, 800);
+    }
+    if (document.readyState === 'loading') {
+        document.addEventListener('DOMContentLoaded', init);
+    } else { init(); }
+})();
+"""
+
 RELOAD_OVERLAY_JS = """
 (function() {
     function init() {
@@ -1842,12 +1907,12 @@ app_ui = ui.page_sidebar(
 
         ui.div(
             ui.output_ui("label_category"),
-            ui.input_select(
+            ui.input_selectize(
                 "category_top", None,
-                choices={"All": "All · 全部",
-                         **{t: f"{categories.label(t, 'en')} · {t}"
-                            for t in categories.TOP_CATEGORIES}},
-                selected="All"
+                choices={t: f"{categories.label(t, 'en')} · {t}"
+                         for t in categories.TOP_CATEGORIES},
+                selected=[], multiple=True,
+                options={"placeholder": "All categories / 全部分类（默认全部）"},
             ),
             ui.output_ui("category_sub_ui"),
             class_="filter-section"
@@ -2064,6 +2129,8 @@ app_ui = ui.page_sidebar(
             ui.tags.script(src="static/plotly.min.js"),
             # Loading overlay shown immediately when 'Reload from source' is clicked
             ui.tags.script(RELOAD_OVERLAY_JS),
+            # Click-to-drill: charts with layout.meta.drill filter on click
+            ui.tags.script(CHART_DRILL_JS),
             # Sidebar hover-expand + pin behaviour
             ui.tags.script(SIDEBAR_UX_JS),
         ),
@@ -2089,70 +2156,96 @@ app_ui = ui.page_sidebar(
         ),
         ui.navset_tab(
             ui.nav_panel(
+                _bnav("👔 Boss View", "👔 老板视图"),
+                # One-glance, minimal-scroll page: verdict → 5 numbers → trend+top5 → movers+alerts.
+                ui.output_ui("boss_summary_line"),
+                ui.div(
+                    _bh3("🚀 At a Glance", "🚀 一览"),
+                    ui.output_ui("boss_hero_band"),
+                    class_="chart-container"
+                ),
+                ui.div(
+                    ui.div(ui.output_ui("boss_trend"), class_="chart-container"),
+                    ui.div(ui.output_ui("boss_top5"), class_="chart-container"),
+                    class_="chart-row r21"
+                ),
+                ui.div(
+                    ui.div(
+                        _bh3("⚡ Top Movers", "⚡ Top 变动"),
+                        ui.output_ui("boss_movers"),
+                        class_="chart-container"
+                    ),
+                    ui.div(
+                        _bh3("🚨 Alert Digest", "🚨 预警摘要"),
+                        ui.output_ui("boss_alerts_mini"),
+                        class_="chart-container"
+                    ),
+                    class_="chart-row"
+                ),
+                ui.HTML(
+                    '<div style="text-align:center; color:#94A3B8; font-size:0.78em; margin:6px 0 12px 0;">'
+                    '<span class="lang-en">🖱 Click a Top-5 bar to filter · full analysis in Executive Overview → · Ctrl+P prints this page</span>'
+                    '<span class="lang-zh">🖱 点击 Top-5 柱条即可筛选 · 完整分析见「执行概览」 · Ctrl+P 可打印本页</span></div>'
+                ),
+            ),
+            ui.nav_panel(
                 _bnav("Executive Overview", "执行概览"),
+                # ── Answer first: auto summary + hero KPI band ────────────────
+                ui.output_ui("exec_summary_line"),
                 ui.div(
-                    _bh3("🧭 Operating Summary", "🧭 运营概览",
-                         _help("Bitsbang-style operating KPIs on the successful-order (充值成功) basis, with "
-                               "month-over-month vs the prior equal period. Cards showing '—' await the China-team "
-                               "formulas for 复购率 / 留存率 and the 新客/老客 split (老客·新客营业额, 新客数, 转化率).")),
-                    _bp("China-team operating view — 营业额, 成单数/成单人数, 成单率, 客单价 and customer metrics on the 充值成功 basis.",
-                        "中国团队运营视角 — 以「充值成功」为口径的营业额、成单数/成单人数、成单率、客单价及客户指标。"),
-                    ui.output_ui("operating_overview_kpis"),
+                    _bh3("🚀 At a Glance", "🚀 一览",
+                         _help("The five numbers that matter: GMV (+MoM), Net Contribution (+margin), "
+                               "orders, AOV, and progress vs the monthly targets (targets.csv).")),
+                    ui.output_ui("exec_hero_band"),
                     class_="chart-container"
                 ),
+                # ── Exceptions: alerts + movers side by side ──────────────────
                 ui.div(
-                    _bh3("💎 Net Contribution", "💎 净贡献",
-                         _help("Net Contribution = successful GMV − COGS (结算价 converted to RMB) − coupon spend. "
-                               "已退款 GMV is shown separately and excluded. True bottom-line per the selected filters.")),
-                    _bp("The true bottom line: successful GMV minus supplier cost (COGS) minus coupon spend.",
-                        "真实利润口径：成功GMV 减去供应商成本（COGS）再减去优惠券支出。"),
-                    ui.output_ui("net_contribution_kpi"),
-                    class_="chart-container"
+                    ui.div(
+                        _bh3("🚨 Anomaly Detection & Alerts", "🚨 异常检测与预警",
+                             _help("Cards are generated by comparing the last 7 days vs the prior 4-week baseline.")),
+                        ui.output_ui("alerts_panel"),
+                        class_="chart-container"
+                    ),
+                    ui.div(
+                        _bh3("⚡ PoP Top Movers", "⚡ 环比 Top 变动榜"),
+                        _bp("Largest revenue changes vs the previous equally-long period.",
+                            "与前等长周期相比收入变化最大的市场与运营商。"),
+                        ui.output_ui("top_movers_strip"),
+                        class_="chart-container"
+                    ),
+                    class_="chart-row"
                 ),
+                # ── Trend + mix ───────────────────────────────────────────────
                 ui.div(
-                    _bh3("🚨 Anomaly Detection & Alerts", "🚨 异常检测与预警",
-                         _help("Cards are generated by comparing the last 7 days vs the prior 4-week baseline.")),
-                    _bp("Auto-detected signals from the last 7 days vs the prior 4-week baseline.",
-                        "基于过去7天与前4周基线的自动检测信号，忽略日期范围，始终锚定最新数据。"),
-                    ui.output_ui("alerts_panel"),
-                    class_="chart-container"
+                    ui.div(
+                        _bh3("📈 Revenue & Order Volume Trend", "📈 收入与订单量趋势"),
+                        ui.output_ui("overview_sales_trend"),
+                        class_="chart-container"
+                    ),
+                    ui.div(
+                        _bh3("🥧 Revenue by Segment", "🥧 各客户分类收入"),
+                        ui.output_ui("overview_sales_segment"),
+                        class_="chart-container"
+                    ),
+                    class_="chart-row r21"
                 ),
+                # ── Geography ────────────────────────────────────────────────
                 ui.div(
-                    _bh3("📊 Key Performance Indicators (KPIs)", "📊 核心绩效指标 (KPIs)"),
-                    ui.output_ui("overview_metrics"),
-                    class_="chart-container"
-                ),
-                ui.div(
-                    _bh3("⚡ Period-over-Period (PoP) Top Movers", "⚡ 环比 Top 变动榜"),
-                    _bp("Markets and operators with the largest revenue change versus the previous equally-long period.",
-                        "与前等长周期相比收入变化最大的市场与运营商。"),
-                    ui.output_ui("top_movers_strip"),
-                    class_="chart-container"
-                ),
-                ui.div(
-                    _bh3("📈 Revenue & Order Volume Trend", "📈 收入与订单量趋势"),
-                    ui.output_ui("overview_sales_trend"),
-                    class_="chart-container"
-                ),
-                ui.div(
-                    _bh3("🥧 Revenue (GMV) by Customer Segment", "🥧 各客户分类收入 (GMV)"),
-                    ui.output_ui("overview_sales_segment"),
-                    class_="chart-container"
-                ),
-                ui.div(
-                    _bh3("🌐 Revenue Contribution by Region", "🌐 各地区收入贡献",
-                         _help("Revenue split across geographic regions.")),
-                    _bp("Regional revenue breakdown to identify concentration and diversification across continents.",
-                        "区域收入分布，快速识别集中度及洲际多元化机会。"),
-                    ui.output_ui("overview_region_donut"),
-                    class_="chart-container"
-                ),
-                ui.div(
-                    _bh3("🏆 Top 5 Markets by Revenue (GMV)", "🏆 收入前 5 大市场 (GMV)"),
-                    _bp("Quick-glance ranking of your highest-value markets.",
-                        "高价值市场排名速览，完整排名请查看「市场洞察」页。"),
-                    ui.output_ui("overview_top5_countries"),
-                    class_="chart-container"
+                    ui.div(
+                        _bh3("🌐 Revenue Contribution by Region", "🌐 各地区收入贡献",
+                             _help("Revenue split across geographic regions.")),
+                        ui.output_ui("overview_region_donut"),
+                        class_="chart-container"
+                    ),
+                    ui.div(
+                        _bh3("🏆 Top 5 Markets by Revenue", "🏆 收入前 5 大市场"),
+                        _bp("Quick-glance ranking of your highest-value markets. 🖱 Click a bar to filter.",
+                            "高价值市场排名速览，🖱 点击柱条即可筛选该市场。"),
+                        ui.output_ui("overview_top5_countries"),
+                        class_="chart-container"
+                    ),
+                    class_="chart-row"
                 ),
                 ui.div(
                     _bh3("🌏 Key Countries — Last 3 Months Revenue", "🌏 重点国家 — 近3个月营业额",
@@ -2162,6 +2255,41 @@ app_ui = ui.page_sidebar(
                         "重点市场近3个月的营业额走势（充值成功口径），不受国家筛选影响。"),
                     ui.output_ui("key_country_3m_trend"),
                     class_="chart-container"
+                ),
+                # ── Detailed KPI breakdown (de-duped: collapsed by default) ──
+                ui.tags.details(
+                    ui.tags.summary(
+                        ui.tags.span("📊 Detailed KPI Breakdown (运营概览 · 净贡献 · KPIs)", class_="lang-en"),
+                        ui.tags.span("📊 详细指标（运营概览 · 净贡献 · KPIs）", class_="lang-zh"),
+                        style=("cursor: pointer; font-weight: 600; padding: 10px 14px; "
+                               "background: #EEF0FF; color: #5B6CFF; border-radius: 8px; "
+                               "margin: 16px 8px 0 8px; user-select: none; list-style: none; "
+                               "border: 1px solid #C7D2FE;")
+                    ),
+                    ui.div(
+                        _bh3("🧭 Operating Summary", "🧭 运营概览",
+                             _help("Bitsbang-style operating KPIs on the successful-order (充值成功) basis, with "
+                                   "month-over-month vs the prior equal period. Cards showing '—' await the China-team "
+                                   "formulas for 复购率 / 留存率 and the 新客/老客 split (老客·新客营业额, 新客数, 转化率).")),
+                        _bp("China-team operating view — 营业额, 成单数/成单人数, 成单率, 客单价 and customer metrics on the 充值成功 basis.",
+                            "中国团队运营视角 — 以「充值成功」为口径的营业额、成单数/成单人数、成单率、客单价及客户指标。"),
+                        ui.output_ui("operating_overview_kpis"),
+                        class_="chart-container"
+                    ),
+                    ui.div(
+                        _bh3("💎 Net Contribution", "💎 净贡献",
+                             _help("Net Contribution = successful GMV − COGS (结算价 converted to RMB) − coupon spend. "
+                                   "已退款 GMV is shown separately and excluded. True bottom-line per the selected filters.")),
+                        _bp("The true bottom line: successful GMV minus supplier cost (COGS) minus coupon spend.",
+                            "真实利润口径：成功GMV 减去供应商成本（COGS）再减去优惠券支出。"),
+                        ui.output_ui("net_contribution_kpi"),
+                        class_="chart-container"
+                    ),
+                    ui.div(
+                        _bh3("📊 Key Performance Indicators (KPIs)", "📊 核心绩效指标 (KPIs)"),
+                        ui.output_ui("overview_metrics"),
+                        class_="chart-container"
+                    ),
                 ),
                 ui.div(
                     _bh3("📋 Segment Performance Summary", "📋 分部业绩汇总"),
@@ -3653,7 +3781,7 @@ def server(input, output, session):
     applied_order_status = reactive.Value("Successful")
     applied_region = reactive.Value("All")
     applied_country = reactive.Value("All")
-    applied_category_top = reactive.Value("All")
+    applied_category_top = reactive.Value([])   # list of selected top categories ([] = all)
     applied_category_subs = reactive.Value([])
     applied_currency = reactive.Value("RMB")
     applied_trend_period = reactive.Value("Daily")
@@ -3692,10 +3820,10 @@ def server(input, output, session):
         applied_order_status.set(input.order_status_f() or "Successful")
         applied_region.set(input.region() or "All")
         applied_country.set(input.country() or "All")
-        _cat_top = input.category_top() or "All"
-        applied_category_top.set(_cat_top)
+        _cat_tops = list(input.category_top() or [])
+        applied_category_top.set(_cat_tops)
         _cat_subs = []
-        if _cat_top != "All":
+        if len(_cat_tops) == 1:   # subcategory drill only when exactly one top is chosen
             try:
                 _cat_subs = list(input.category_sub() or [])
             except Exception:
@@ -3712,6 +3840,32 @@ def server(input, output, session):
     @render.text
     def apply_status():
         return applied_status_rv()
+
+    @reactive.Effect
+    @reactive.event(input.chart_drill)
+    def handle_chart_drill():
+        """Click-to-drill: a click on a whitelisted chart (layout.meta.drill)
+        applies that value as the matching sidebar filter — clicking the same
+        value again toggles back to 'All'. No Enter needed."""
+        info = input.chart_drill() or {}
+        dim = info.get("dim")
+        val = str(info.get("value") or "").strip()
+        if not dim or not val:
+            return
+        if dim == "country":
+            new = "All" if applied_country() == val else val
+            ui.update_selectize("country", selected=new, session=session)
+            applied_country.set(new)
+        elif dim == "segment":
+            new = "All" if applied_segment() == val else val
+            ui.update_select("segment", selected=new, session=session)
+            applied_segment.set(new)
+        else:
+            return
+        applied_status_rv.set(
+            f"🖱 Chart-click filter: {dim} = {new}" if new != "All"
+            else "🖱 Chart-click filter cleared"
+        )
 
     # ── Language-reactive sidebar labels ──────────────────────────────────────
     _LABELS = {
@@ -3791,15 +3945,23 @@ def server(input, output, session):
     @render.ui
     @safe_render
     def category_sub_ui():
-        """Subcategory multi-select, driven by the chosen top category.
-        Empty selection = the whole top group. Hidden when top = All."""
-        top = input.category_top() or "All"
-        if top == "All":
+        """Subcategory multi-select — shown only when exactly ONE top category is
+        picked (empty selection = the whole group). With 0 or several tops there's
+        no single group to drill into, so a hint is shown instead."""
+        tops = list(input.category_top() or [])
+        if len(tops) != 1:
+            if not tops:
+                en, zh = ("Leave empty for all categories, or pick one to drill into subcategories.",
+                          "留空=全部分类；选择一个大类可再按子分类筛选。")
+            else:
+                en, zh = ("Several categories selected — subcategory drill applies to a single category only.",
+                          "已选多个大类——子分类筛选仅在选择单个大类时可用。")
             return ui.tags.small(
-                ui.tags.span("Pick a category to narrow by subcategory (optional).", class_="lang-en"),
-                ui.tags.span("选择大类后可再按子分类筛选（可选）。", class_="lang-zh"),
+                ui.tags.span(en, class_="lang-en"),
+                ui.tags.span(zh, class_="lang-zh"),
                 style="display:block; font-size:0.72em; color:rgba(255,255,255,0.7); margin-top:4px;"
             )
+        top = tops[0]
         zh = _is_zh()
         sub_choices = {s: categories.label(s, "zh" if zh else "en")
                        for s in categories.subcategories(top)}
@@ -4068,9 +4230,9 @@ def server(input, output, session):
         applied_segment.set("All")
         applied_region.set("All")
         applied_country.set("All")
-        applied_category_top.set("All")
+        applied_category_top.set([])
         applied_category_subs.set([])
-        ui.update_select("category_top", selected="All", session=session)
+        ui.update_selectize("category_top", selected=[], session=session)
 
         if 'order_time' in new_data.columns and not new_data['order_time'].isna().all():
             new_min = new_data['order_time'].min().date()
@@ -4418,13 +4580,17 @@ def server(input, output, session):
         ui.update_date("date_to",   value=end,   session=session)
 
     def _apply_category_or_exclusions(df):
-        """Apply the sidebar product-category filter. When a top category is
-        chosen, keep exactly its mapped 商品分类 values (an explicit choice
-        overrides the China-team 电子钱包/Touch'n Go exclusion). When it's
-        'All', fall back to the default global exclusion."""
-        top = applied_category_top()
-        if top and top != "All" and 'product_category' in df.columns:
-            keep = categories.raw_values(top, applied_category_subs())
+        """Apply the sidebar product-category filter. When one or more top
+        categories are chosen, keep exactly their mapped 商品分类 values (an
+        explicit choice overrides the China-team 电子钱包/Touch'n Go exclusion);
+        with a single top, an optional subcategory selection narrows further.
+        With nothing selected, fall back to the default global exclusion."""
+        tops = applied_category_top()
+        if tops and 'product_category' in df.columns:
+            if len(tops) == 1:
+                keep = categories.raw_values(tops[0], applied_category_subs())
+            else:
+                keep = set().union(*(categories.raw_values(t) for t in tops))
             return df[df['product_category'].astype(str).str.strip().isin(keep)]
         return _apply_global_exclusions(df)
 
@@ -5132,14 +5298,14 @@ def server(input, output, session):
             style="display: flex; flex-wrap: wrap; justify-content: flex-start; gap: 12px;"
         )
 
-    @render.ui
-    @safe_render
-    def net_contribution_kpi():
-        """Net Contribution (净贡献) = 成功GMV − COGS(结算价→RMB) − 券支出, with
-        已退款GMV shown as context (excluded from Net). MoM vs prior equal period."""
-        base = filtered_base_calc()            # already excludes 电子钱包/TNG
+    @reactive.Calc
+    def net_contribution_calc():
+        """Shared Net-Contribution components (currency-converted), consumed by
+        the detailed 净贡献 card, the hero band, and the Boss view.
+        Returns dict(net, gmv, cogs, coupon, refunded_gmv, net_prev, delta, margin_pct)."""
+        base = filtered_base_calc()            # already excludes 电子钱包/TNG (unless category chosen)
         prev_base = previous_period_base()
-        currency = currency_converter(); rate, sym = currency['rate'], currency['symbol']
+        currency = currency_converter(); rate = currency['rate']
 
         def _net(b):
             if b is None or len(b) == 0:
@@ -5157,6 +5323,19 @@ def server(input, output, session):
         net_p = _net(prev_base)[0]
         delta = ((net - net_p) / net_p * 100) if net_p and net_p > 0 else None
         margin_pct = (net / gmv * 100) if gmv else 0.0
+        return {"net": net, "gmv": gmv, "cogs": cogs, "coupon": coupon,
+                "refunded_gmv": refunded_gmv, "net_prev": net_p,
+                "delta": delta, "margin_pct": margin_pct}
+
+    @render.ui
+    @safe_render
+    def net_contribution_kpi():
+        """Net Contribution (净贡献) = 成功GMV − COGS(结算价→RMB) − 券支出, with
+        已退款GMV shown as context (excluded from Net). MoM vs prior equal period."""
+        currency = currency_converter(); sym = currency['symbol']
+        nc = net_contribution_calc()
+        net, gmv, cogs, coupon = nc["net"], nc["gmv"], nc["cogs"], nc["coupon"]
+        refunded_gmv, delta, margin_pct = nc["refunded_gmv"], nc["delta"], nc["margin_pct"]
 
         sub = (f'<span class="lang-en">GMV {T.format_number(gmv, sym)} − COGS {T.format_number(cogs, sym)} '
                f'− coupon {T.format_number(coupon, sym)}</span>'
@@ -5181,10 +5360,143 @@ def server(input, output, session):
             style="display: flex; flex-wrap: wrap; gap: 12px;"
         )
 
+    # ── Boss view: hero KPI band + auto executive summary ────────────────────
+    # Builder functions (not renders) so BOTH the Executive Overview and the
+    # 老板视图 tab can show them — Shiny output ids must be unique per tab, so
+    # each tab gets a thin @render.ui wrapper calling the shared builder.
+
+    def _country_movers():
+        """(riser_name, riser_pct, decliner_name, decliner_pct) with the ≥500
+        prior-revenue significance floor — shared by summary + movers strip."""
+        df = filtered_data(); prev = previous_period_data()
+        if 'country' not in df.columns or 'sales' not in df.columns:
+            return None, None, None, None
+        cur = df.groupby('country', observed=True)['sales'].sum()
+        prv = prev.groupby('country', observed=True)['sales'].sum()
+        cur.index = cur.index.astype(str); prv.index = prv.index.astype(str)
+        g = pd.concat([cur.rename('cur'), prv.rename('prv')], axis=1).fillna(0)
+        g = g[g['prv'] >= 500.0]
+        if g.empty:
+            return None, None, None, None
+        g['pct'] = (g['cur'] - g['prv']) / g['prv'] * 100
+        g = g.dropna(subset=['pct'])
+        if g.empty:
+            return None, None, None, None
+        r = g['pct'].idxmax(); d = g['pct'].idxmin()
+        return r, float(g.loc[r, 'pct']), d, float(g.loc[d, 'pct'])
+
+    def _exec_summary():
+        """One-sentence bilingual verdict banner: GMV + MoM, net margin, biggest
+        ▲/▼ market, data-through date. The 'answer first' line a boss reads."""
+        df = filtered_data(); prev = previous_period_data()
+        currency = currency_converter(); rate, sym = currency['rate'], currency['symbol']
+        nc = net_contribution_calc()
+        gmv = float(df['sales'].sum() * rate) if 'sales' in df.columns else 0.0
+        gmv_p = float(prev['sales'].sum() * rate) if 'sales' in prev.columns else 0.0
+        mom = ((gmv - gmv_p) / gmv_p * 100) if gmv_p > 0 else None
+        r, rp, d, dp = _country_movers()
+        thru = df['order_time'].max() if 'order_time' in df.columns and len(df) else None
+        thru_s = thru.strftime('%Y-%m-%d') if thru is not None and pd.notna(thru) else "—"
+        mom_s = T.format_pct(mom) if mom is not None else "—"
+        mom_col = T.delta_color(mom)
+        gmv_s = T.format_number(gmv, sym)
+
+        en = (f"GMV <b>{gmv_s}</b> (<span style='color:{mom_col};font-weight:700'>{mom_s}</span> vs prior period), "
+              f"net margin <b>{nc['margin_pct']:.1f}%</b>")
+        zh = (f"营业额 <b>{gmv_s}</b>（环比 <span style='color:{mom_col};font-weight:700'>{mom_s}</span>），"
+              f"净贡献率 <b>{nc['margin_pct']:.1f}%</b>")
+        if r is not None:
+            en += f" · fastest growth <b>{r}</b> ({T.format_pct(rp)})"
+            zh += f"；增长最快 <b>{r}</b>（{T.format_pct(rp)}）"
+        if d is not None and dp is not None and dp < 0:
+            en += f" · watch <b>{d}</b> ({T.format_pct(dp)})"
+            zh += f"；需关注 <b>{d}</b>（{T.format_pct(dp)}）"
+        en += f" · data through {thru_s}."
+        zh += f"；数据截至 {thru_s}。"
+        return ui.HTML(
+            f'<div style="background:linear-gradient(135deg,#EEF2FF,#F5F3FF);'
+            f'border:1px solid #C7D2FE;border-left:5px solid #5B6CFF;border-radius:12px;'
+            f'padding:14px 18px;margin-bottom:14px;font-size:1.02em;color:#1E293B;line-height:1.5;">'
+            f'🧭 <span class="lang-en">{en}</span><span class="lang-zh">{zh}</span></div>'
+        )
+
+    def _hero_cards():
+        """The 5-card hero band: 营业额 · 净贡献 · 成单数 · 客单价 · vs Target."""
+        df = filtered_data(); prev = previous_period_data()
+        currency = currency_converter(); rate, sym = currency['rate'], currency['symbol']
+        nc = net_contribution_calc()
+
+        gmv = float(df['sales'].sum() * rate) if 'sales' in df.columns else 0.0
+        gmv_p = float(prev['sales'].sum() * rate) if 'sales' in prev.columns else 0.0
+        gmv_d = ((gmv - gmv_p) / gmv_p * 100) if gmv_p > 0 else None
+        orders = int(df['order_id'].nunique()) if 'order_id' in df.columns else len(df)
+        orders_p = int(prev['order_id'].nunique()) if 'order_id' in prev.columns else len(prev)
+        orders_d = ((orders - orders_p) / orders_p * 100) if orders_p > 0 else None
+        aov = gmv / orders if orders else 0.0
+        aov_p = (gmv_p / orders_p) if orders_p else 0.0
+        aov_d = ((aov - aov_p) / aov_p * 100) if aov_p > 0 else None
+
+        # vs Target: sum monthly revenue targets (RMB) across the applied range,
+        # compared against RMB GMV (targets.csv is RMB-based).
+        targets = _load_targets()
+        tgt_txt, tgt_delta = "—", None
+        dfrom, dto = applied_date_from(), applied_date_to()
+        if targets and dfrom and dto:
+            months = pd.period_range(pd.Timestamp(dfrom), pd.Timestamp(dto), freq='M').astype(str)
+            tsum = sum(targets.get(('revenue', m), targets.get(('gmv', m), 0.0)) for m in months)
+            if tsum > 0:
+                gmv_rmb = float(df['sales'].sum()) if 'sales' in df.columns else 0.0
+                pct = gmv_rmb / tsum * 100
+                tgt_txt = f"{pct:.0f}%"
+                tgt_delta = pct - 100.0
+        bl = lambda en, zh: ui.HTML(f'<span class="lang-en">{en}</span><span class="lang-zh">{zh}</span>')
+        cards = [
+            _kpi_card("💰", "sales-icon", bl("Revenue (GMV)", "营业额"),
+                      T.format_number(gmv, sym), gmv_d,
+                      bl("successful-order basis, vs prior period", "充值成功口径 · 环比"),
+                      "SUM(实际支付) on the 充值成功 basis for the selected filters."),
+            _kpi_card("💎", "countries-icon", bl("Net Contribution", "净贡献"),
+                      T.format_number(nc['net'], sym), nc['delta'],
+                      bl(f"margin {nc['margin_pct']:.1f}%", f"净贡献率 {nc['margin_pct']:.1f}%"),
+                      "GMV − COGS(结算价→RMB) − coupon spend."),
+            _kpi_card("🧾", "orders-icon", bl("Orders", "成单数"),
+                      T.format_int(orders), orders_d,
+                      bl("distinct successful orders", "去重成功订单数"),
+                      "COUNT(DISTINCT 订单号) on the current filters."),
+            _kpi_card("🎯", "users-icon", bl("Avg Order Value", "客单价"),
+                      T.format_full(aov, sym), aov_d,
+                      bl("GMV ÷ orders", "营业额 ÷ 成单数"),
+                      "Mean order value = GMV ÷ distinct orders."),
+            _kpi_card("📐", "sales-icon", bl("vs Target", "对比目标"),
+                      tgt_txt, tgt_delta,
+                      bl("period GMV ÷ plan (targets.csv)", "期内营业额 ÷ 目标 (targets.csv)"),
+                      "Sum of monthly revenue targets across the selected months. '—' = no targets.csv."),
+        ]
+        return ui.tags.div(*cards, style="display:flex; flex-wrap:wrap; gap:12px;")
+
     @render.ui
     @safe_render
-    def top_movers_strip():
-        """Three side-by-side mini-cards: top riser, top decliner, top product."""
+    def exec_summary_line():
+        return _exec_summary()
+
+    @render.ui
+    @safe_render
+    def exec_hero_band():
+        return _hero_cards()
+
+    @render.ui
+    @safe_render
+    def boss_summary_line():
+        return _exec_summary()
+
+    @render.ui
+    @safe_render
+    def boss_hero_band():
+        return _hero_cards()
+
+    def _movers_cards():
+        """Mini-cards: top riser, top decliner, top product/operator — shared by
+        the Executive Overview strip and the Boss view."""
         df = filtered_data()
         prev = previous_period_data()
         if 'sales' not in df.columns:
@@ -5265,6 +5577,95 @@ def server(input, output, session):
 
     @render.ui
     @safe_render
+    def top_movers_strip():
+        return _movers_cards()
+
+    @render.ui
+    @safe_render
+    def boss_movers():
+        return _movers_cards()
+
+    @render.ui
+    @safe_render
+    def boss_trend():
+        """Compact GMV trend for the Boss one-pager (auto granularity, ~320px)."""
+        df = filtered_data()
+        if 'order_time' not in df.columns or 'sales' not in df.columns or not len(df):
+            return _no_data()
+        currency = currency_converter(); symbol = currency['symbol']
+        span_days = (df['order_time'].max() - df['order_time'].min()).days
+        if span_days <= 62:
+            grouped = df.groupby(df['order_time'].dt.date)['sales'].sum()
+        elif span_days <= 200:
+            grouped = df.groupby(df['order_time'].dt.to_period('W').dt.start_time)['sales'].sum()
+        else:
+            grouped = df.groupby(df['order_time'].dt.to_period('M').dt.start_time)['sales'].sum()
+        s = grouped.mul(currency['rate'])
+        fig = go.Figure(go.Scatter(
+            x=list(s.index), y=list(s.values), mode='lines',
+            line=dict(color=T.PRIMARY, width=2.5, shape='spline'),
+            fill='tozeroy', fillcolor='rgba(91,108,255,0.10)',
+            hovertemplate='<b>%{x|%Y-%m-%d}</b><br>' + symbol + '%{y:,.0f}<extra></extra>',
+        ))
+        T.apply_theme(fig, title=_tt("Revenue Trend"), height=320, showlegend=False,
+                      margin=dict(l=10, r=10, t=45, b=10))
+        return ui.HTML(T.fig_to_html(fig))
+
+    @render.ui
+    @safe_render
+    def boss_top5():
+        """Compact Top-5 markets bar for the Boss one-pager (click-to-drill)."""
+        df = filtered_data()
+        if 'country' not in df.columns or 'sales' not in df.columns or not len(df):
+            return _no_data()
+        currency = currency_converter(); sym = currency['symbol']
+        top = (df.groupby('country', observed=True)['sales'].sum()
+                 .mul(currency['rate']).nlargest(5).iloc[::-1])
+        fig = charts.topn_hbar(
+            values=list(top.values), labels=[str(c) for c in top.index],
+            title=_tt("Top 5 Markets"), xaxis_title=None,
+            hover_label='Sales: ' + sym + '%{x:,.0f}',
+            value_text=[T.format_number(v, sym) for v in top.values],
+            height=320)
+        fig.update_layout(meta={"drill": "country"})
+        return ui.HTML(T.fig_to_html(fig))
+
+    @render.ui
+    @safe_render
+    def boss_alerts_mini():
+        """Compact alert digest for the Boss one-pager: counts + worst slips."""
+        a = alerts_data()
+        if not a:
+            return _no_data()
+        sym = a.get('symbol', '¥')
+        n_slip = len(a.get('slip_ops', [])) + len(a.get('slip_cos', []))
+        n_surge = len(a.get('surge_ops', [])) + len(a.get('surge_cos', []))
+        wk = a.get('week_pct')
+        wk_s = T.format_pct(wk) if wk is not None else "—"
+        rows = [ui.tags.div(
+            ui.tags.span(f"Week {T.format_number(a.get('rec_total', 0), sym)} ",
+                         style="font-weight:700; color:#0F172A;"),
+            ui.tags.span(f"({wk_s} WoW)", style=f"color:{T.delta_color(wk)}; font-weight:600;"),
+            ui.tags.span(f"  ·  🔻 {n_slip} slipping  ·  🔺 {n_surge} surging",
+                         style="color:#475569;"),
+            style="margin-bottom:8px; font-size:0.95em;")]
+        slips = a.get('slip_cos')
+        if slips is not None and len(slips):
+            for name, r in slips.head(3).iterrows():
+                rows.append(ui.tags.div(
+                    f"🔻 {name}: {T.format_pct(r['pct'])} vs baseline",
+                    style="font-size:0.85em; color:#B91C1C; margin-bottom:3px;"))
+        else:
+            rows.append(ui.tags.div("✓ No market slipping >20% vs baseline",
+                                    style="font-size:0.85em; color:#047857;"))
+        rows.append(ui.tags.div(
+            ui.tags.span("Full detail → Executive Overview alerts", class_="lang-en"),
+            ui.tags.span("完整明细 → 执行概览·异常预警", class_="lang-zh"),
+            style="font-size:0.75em; color:#94A3B8; margin-top:6px;"))
+        return ui.tags.div(*rows)
+
+    @render.ui
+    @safe_render
     def overview_sales_trend():
         df = filtered_data()
         if 'order_time' not in df.columns or 'sales' not in df.columns:
@@ -5334,7 +5735,9 @@ def server(input, output, session):
         fig = go.Figure(go.Pie(
             labels=seg['segment'], values=seg['sales'],
             hole=0.55,
-            marker=dict(colors=T.PALETTE, line=dict(color='white', width=2)),
+            # Fixed colour per segment (same entity = same colour on every chart)
+            marker=dict(colors=[T.SEGMENT_COLORS.get(str(s), T.NEUTRAL) for s in seg['segment']],
+                        line=dict(color='white', width=2)),
             textinfo='label+percent', textfont=dict(size=13),
             hovertemplate='<b>%{label}</b><br>Sales: ' + currency['symbol'] + '%{value:,.0f}<br>%{percent}<extra></extra>',
         ))
@@ -5343,6 +5746,7 @@ def server(input, output, session):
                            x=0.5, y=0.5, showarrow=False, font=dict(size=14, color="#0F172A"))
         T.apply_theme(fig, title=_tt(f"Sales mix · {currency['label']}"),
                       showlegend=False, margin=dict(l=10, r=10, t=50, b=10))
+        fig.update_layout(meta={"drill": "segment"})   # 🖱 click a slice → segment filter
         return ui.HTML(T.fig_to_html(fig))
 
     @render.data_frame
@@ -5407,7 +5811,9 @@ def server(input, output, session):
         fig = go.Figure(go.Pie(
             labels=reg['region'], values=reg['sales'],
             hole=0.55,
-            marker=dict(colors=T.PALETTE, line=dict(color='white', width=2)),
+            # Fixed colour per region (same entity = same colour on every chart)
+            marker=dict(colors=[T.REGION_COLORS.get(str(r), T.NEUTRAL) for r in reg['region']],
+                        line=dict(color='white', width=2)),
             textinfo='label+percent', textfont=dict(size=12),
             hovertemplate='<b>%{label}</b><br>Revenue: ' + currency['symbol'] +
                           '%{value:,.0f}<br>Share: %{percent}<extra></extra>',
@@ -5438,6 +5844,7 @@ def server(input, output, session):
         T.apply_theme(fig, title=_tt(f"Top 5 Markets by Revenue (GMV) · {currency['label']}"),
                       xaxis_title=_tt(f"Revenue ({currency['symbol']})"), yaxis_title=None,
                       margin=dict(l=10, r=80, t=50, b=10), height=280)
+        fig.update_layout(meta={"drill": "country"})   # 🖱 click a bar → country filter
         return ui.HTML(T.fig_to_html(fig))
 
     # ── New: Revenue & Orders tab additions ───────────────────────────────────

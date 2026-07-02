@@ -25,6 +25,24 @@ PALETTE = [
     "#A855F7", "#F97316", "#3B82F6", "#22C55E",
 ]
 
+# Fixed colour per business dimension so the SAME entity always gets the SAME
+# colour on every chart (boss-view consistency). Use:
+#   marker_colors=[T.SEGMENT_COLORS.get(s, T.NEUTRAL) for s in labels]
+SEGMENT_COLORS = {
+    "B2C": "#5B6CFF",   # brand indigo
+    "B2B": "#F59E0B",   # amber
+}
+
+REGION_COLORS = {
+    "Asia":        "#5B6CFF",
+    "Middle East": "#8B5CF6",
+    "Africa":      "#F59E0B",
+    "Europe":      "#0EA5E9",
+    "Americas":    "#10B981",
+    "Oceania":     "#14B8A6",
+    "Other":       "#94A3B8",
+}
+
 # Sequential scale for choropleths / heatmaps
 SCALE_SEQUENTIAL = [
     [0.00, "#EEF2FF"],
