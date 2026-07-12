@@ -1506,11 +1506,12 @@ def _bh3(en_text: str, zh_text: str, help_widget=None, **kwargs):
 
 
 def _bp(en_text: str, zh_text: str):
-    """Bilingual description paragraph below a chart heading."""
+    """Bilingual description below a chart heading — styled as a light caption
+    (small, muted, tight) so section intros scan as hints, not paragraphs."""
     return ui.p(
         ui.tags.span(en_text, class_="lang-en"),
         ui.tags.span(zh_text, class_="lang-zh"),
-        style="color:#64748B; font-size:0.88em; margin-top:-8px;"
+        style="color:#94A3B8; font-size:0.78em; margin:-8px 0 8px 0; line-height:1.35;"
     )
 
 
@@ -1551,7 +1552,7 @@ _GTYPE_ZH = {
 
 # Rows: (title_en, title_zh, type, use_en, use_zh)
 _GUIDELINE_TABS = [
-    ("📊", "Executive Overview", "执行概览", [
+    ("📊", "Overview", "总览", [
         ("🧭 Operating Summary", "🧭 运营概览", "KPI strip", "11 China-team KPIs (营业额…转化率) on the 充值成功 basis with MoM.", "11项中国团队核心指标（营业额…转化率），充值成功口径，含环比。"),
         ("🚨 Anomaly Detection & Alerts", "🚨 异常检测与预警", "KPI alerts", "Auto-flags slipping/surging operators & markets (7d vs 4-wk).", "自动标记异常的运营商与市场（近7天 vs 前4周）。"),
         ("📊 Key Performance Indicators", "📊 核心绩效指标", "KPI cards", "GMV/orders/客单价/customers/markets/MoM/margin.", "营业额/订单/客单价/客户/市场/环比/毛利。"),
@@ -2156,40 +2157,7 @@ app_ui = ui.page_sidebar(
         ),
         ui.navset_tab(
             ui.nav_panel(
-                _bnav("👔 Boss View", "👔 老板视图"),
-                # One-glance, minimal-scroll page: verdict → 5 numbers → trend+top5 → movers+alerts.
-                ui.output_ui("boss_summary_line"),
-                ui.div(
-                    _bh3("🚀 At a Glance", "🚀 一览"),
-                    ui.output_ui("boss_hero_band"),
-                    class_="chart-container"
-                ),
-                ui.div(
-                    ui.div(ui.output_ui("boss_trend"), class_="chart-container"),
-                    ui.div(ui.output_ui("boss_top5"), class_="chart-container"),
-                    class_="chart-row r21"
-                ),
-                ui.div(
-                    ui.div(
-                        _bh3("⚡ Top Movers", "⚡ Top 变动"),
-                        ui.output_ui("boss_movers"),
-                        class_="chart-container"
-                    ),
-                    ui.div(
-                        _bh3("🚨 Alert Digest", "🚨 预警摘要"),
-                        ui.output_ui("boss_alerts_mini"),
-                        class_="chart-container"
-                    ),
-                    class_="chart-row"
-                ),
-                ui.HTML(
-                    '<div style="text-align:center; color:#94A3B8; font-size:0.78em; margin:6px 0 12px 0;">'
-                    '<span class="lang-en">🖱 Click a Top-5 bar to filter · full analysis in Executive Overview → · Ctrl+P prints this page</span>'
-                    '<span class="lang-zh">🖱 点击 Top-5 柱条即可筛选 · 完整分析见「执行概览」 · Ctrl+P 可打印本页</span></div>'
-                ),
-            ),
-            ui.nav_panel(
-                _bnav("Executive Overview", "执行概览"),
+                _bnav("📊 Overview", "📊 总览"),
                 # ── Answer first: auto summary + hero KPI band ────────────────
                 ui.output_ui("exec_summary_line"),
                 ui.div(
@@ -2296,8 +2264,16 @@ app_ui = ui.page_sidebar(
                     ui.output_data_frame("segment_summary_table"),
                     class_="data-table"
                 ),
+                ui.HTML(
+                    '<div style="text-align:center; color:#94A3B8; font-size:0.78em; margin:6px 0 12px 0;">'
+                    '<span class="lang-en">🖱 Click a Top-5 bar or the segment donut to filter · Ctrl+P prints this page</span>'
+                    '<span class="lang-zh">🖱 点击 Top-5 柱条或分类环图即可筛选 · Ctrl+P 可打印本页</span></div>'
+                ),
                 _remarks_accordion("executive_overview"),
             ),
+            # ── Performance group: PoP Comparison · Revenue & Orders ───────
+            ui.nav_menu(
+                _bnav("📈 Performance", "📈 业绩"),
             ui.nav_panel(
                 _bnav("Performance Comparison", "业绩对比"),
                 ui.div(
@@ -2451,6 +2427,10 @@ app_ui = ui.page_sidebar(
                 ),
                 _remarks_accordion("revenue_orders"),
             ),
+            ),
+            # ── Markets & Products group ────────────────────────────────────
+            ui.nav_menu(
+                _bnav("🌍 Markets & Products", "🌍 市场与产品"),
             ui.nav_panel(
                 _bnav("Market Intelligence", "市场洞察"),
                 ui.div(
@@ -2616,265 +2596,6 @@ app_ui = ui.page_sidebar(
                     class_="chart-container"
                 ),
                 _remarks_accordion("market_intelligence"),
-            ),
-            ui.nav_panel(
-                _bnav("Operational Intelligence", "运营智能"),
-                ui.div(
-                    _bh3("📊 Operational KPIs", "📊 运营核心指标"),
-                    _bp("Key operational metrics: Avg Daily Revenue, Avg Daily Orders, Peak Revenue Day, Peak Hour.",
-                        "日均收入、日均订单数、最高收入日及高峰时段等运营核心指标。"),
-                    ui.output_ui("ops_kpis"),
-                    class_="chart-container"
-                ),
-                ui.div(
-                    _bh3("📈 Revenue Velocity — Revenue & Order Volume Trend", "📈 收入速度 — 收入与订单量趋势",
-                         _help("Dual-axis chart: bars = order volume, line = revenue.")),
-                    ui.output_ui("daily_sales_trend"),
-                    class_="chart-container"
-                ),
-                ui.div(
-                    _bh3("📉 Day-over-Day Revenue Change (%)", "📉 日环比收入变化 (%)",
-                         _help("Green = increased; Red = declined vs prior day.")),
-                    _bp("Large negative bars may indicate supplier downtime, payment failures, or market disruptions.",
-                        "大幅负值可能表明供应商宕机、支付失败或市场特定中断。"),
-                    ui.output_ui("daily_delta_chart"),
-                    class_="chart-container"
-                ),
-                ui.div(
-                    _bh3("📅 Order Activity Heatmap (Day of Week × Hour of Day)", "📅 订单活跃度热力图（星期 × 小时）",
-                         _help("Each cell = orders at that day/hour. Use to plan staffing and maintenance.")),
-                    _bp("Identify peak trading hours and low-activity windows for promotions and maintenance.",
-                        "识别高峰交易时段及低活跃窗口，用于安排促销活动和系统维护。"),
-                    ui.output_ui("weekday_sales_chart"),
-                    class_="chart-container"
-                ),
-                _remarks_accordion("operational_intelligence"),
-            ),
-            ui.nav_panel(
-                _bnav("Supplier & Operator Performance", "供应商绩效"),
-                ui.div(
-                    _bh3("🤝 Operator Performance Snapshot", "🤝 供应商绩效快照",
-                         _help("Key metrics anchored to the current filter selection.")),
-                    _bp("KPI snapshot for the period. Use as anchor metrics when negotiating volume discounts and SLA terms.",
-                        "当期 KPI 快照，可用作与各供应商谈判折扣、返利及 SLA 条款的锚点。"),
-                    ui.output_ui("supplier_kpis"),
-                    class_="chart-container"
-                ),
-                ui.div(
-                    _bh3("⚠️ Supplier Concentration Risk", "⚠️ 供应商集中度风险",
-                         _help("Top 3 operators >80% GMV = high supplier concentration risk.")),
-                    _bp("High concentration (>80% from top 3) signals vendor dependency. Target diversification.",
-                        "高集中度（前3供应商占 GMV >80%）表明供应商依赖风险，应推进多元化布局。"),
-                    ui.output_ui("supplier_concentration_card"),
-                    class_="chart-container"
-                ),
-                ui.div(
-                    _bh3("💰 Gross Margin by Operator (Revenue − Cost of Goods)", "💰 各运营商毛利润（收入 − 结算成本）",
-                         _help("Gross Margin = Revenue − Settlement Price. Thin margins are renegotiation targets.")),
-                    _bp("Thin margins indicate pricing pressure or unfavorable settlement terms.",
-                        "毛利润偏低表明定价压力或不利结算条款，应优先重新谈判合同。"),
-                    ui.output_ui("supplier_margin_chart"),
-                    class_="chart-container"
-                ),
-                ui.div(
-                    _bh3("📊 Gross Margin % Trend by Operator", "📊 各运营商毛利率趋势",
-                         _help("Margin % trend. Decline = margin compression, signal to renegotiate.")),
-                    _bp("A downward trend signals deteriorating supplier terms requiring renegotiation.",
-                        "下降趋势表明供应商条款恶化，需重新谈判。"),
-                    ui.output_ui("supplier_margin_pct_trend"),
-                    class_="chart-container"
-                ),
-                ui.div(
-                    _bh3("🥧 Revenue Concentration — Pareto Analysis", "🥧 收入集中度 — 帕累托分析",
-                         _help("Bars = GMV per operator. Red line = cumulative share.")),
-                    _bp("If 3 operators drive 80% of GMV, they are your highest-leverage vendor relationships.",
-                        "若前3家供应商贡献80% GMV，则属于高集中风险，同时也是最具谈判杠杆的关系。"),
-                    ui.output_ui("supplier_pareto"),
-                    class_="chart-container"
-                ),
-                ui.div(
-                    _bh3("📈 Operator Revenue Trend", "📈 运营商收入趋势"),
-                    _bp("Monthly revenue per operator. Identify declining (churn risk) or growing (upsell) operators.",
-                        "各运营商月度收入走势，识别流失风险或增值机会。"),
-                    ui.output_ui("supplier_trend"),
-                    class_="chart-container"
-                ),
-                ui.div(
-                    _bh3("🚀 Top Operators by Revenue (GMV)", "🚀 按收入排名运营商 (GMV)"),
-                    ui.output_ui("operator_sales_chart"),
-                    class_="chart-container"
-                ),
-                ui.div(
-                    _bh3("📦 Top Operators by Order Volume", "📦 按订单量排名运营商"),
-                    ui.output_ui("operator_orders_chart"),
-                    class_="chart-container"
-                ),
-                ui.div(
-                    ui.div(
-                        _bh3("📋 Operator Performance Scorecard (Sortable)", "📋 运营商绩效评分卡（可排序）", style="margin: 0;"),
-                        ui.download_button(
-                            "download_supplier_scorecard", "⬇ Excel",
-                            class_="refresh-btn",
-                            style=("background: #5B6CFF !important; color: white !important; "
-                                   "border: none !important; padding: 6px 14px !important; "
-                                   "font-size: 0.85em !important; width: auto !important; "
-                                   "margin: 0 !important;")
-                        ),
-                        style="display:flex; justify-content:space-between; align-items:center;"
-                    ),
-                    ui.p("Sort by Gross Margin, GMV, AOV, or Period-over-Period Growth to prepare negotiation briefs. "
-                         "Download to Excel with filters embedded in the filename.",
-                         style="color:#64748B; margin-top:8px;"),
-                    ui.output_data_frame("supplier_scorecard"),
-                    class_="data-table"
-                ),
-                ui.div(
-                    _bh3("💹 Gross Margin by Product Category", "💹 各产品类别毛利润",
-                         _help("Revenue vs cost (settlement price) breakdown by product category. "
-                               "Requires settlement_price data. "
-                               "Margin % shown above each bar.")),
-                    _bp("Compare margin rates across product categories to identify which categories drive the most profit.",
-                        "比较各产品类别的毛利率，识别利润贡献最高的类别。"),
-                    ui.output_ui("margin_by_category_chart"),
-                    class_="chart-container"
-                ),
-                # ══ Fulfillment & Routing Health ══════════════════════════
-                ui.HTML(
-                    '<div style="display:flex;align-items:center;gap:12px;'
-                    'background:linear-gradient(90deg,rgba(245,158,11,0.10),transparent);'
-                    'border-left:4px solid #F59E0B;border-radius:0 8px 8px 0;'
-                    'padding:12px 18px;margin:18px 0 14px;">'
-                    '<span style="font-size:1.5em;">🔌</span>'
-                    '<div>'
-                    '<div class="lang-en" style="font-weight:700;font-size:1.08em;color:#1E293B;">'
-                    'Fulfillment &amp; Routing Health</div>'
-                    '<div class="lang-zh" style="font-weight:700;font-size:1.08em;color:#1E293B;">'
-                    '履约与路由健康度</div>'
-                    '<div style="font-size:0.8em;color:#64748B;margin-top:2px;">'
-                    'Supplier order-id coverage (接口商订单号), PIN delivery, payment gateway mix</div>'
-                    '</div></div>'
-                ),
-                ui.div(
-                    _bh3("🩺 Fulfillment KPIs", "🩺 履约核心指标",
-                         _help("Routing coverage = orders carrying a supplier-side order id (接口商订单号). "
-                               "Successful orders without one are a reconciliation risk.")),
-                    _bp("Orders marked successful but missing the supplier order id cannot be reconciled against supplier statements.",
-                        "标记成功却缺少接口商订单号的订单无法与供应商账单对账。"),
-                    ui.output_ui("fulfillment_kpis"),
-                    class_="chart-container"
-                ),
-                ui.div(
-                    _bh3("⚠ Successful Orders Missing Supplier Order ID", "⚠ 缺少接口商订单号的成功订单",
-                         _help("By operator — these orders were charged as successful but have no supplier-side "
-                               "reference, so they can't be matched in reconciliation.")),
-                    _bp("Escalate operators with persistent routing gaps — every order here is unverifiable spend.",
-                        "对持续存在路由缺口的运营商进行升级处理——这里的每一单都是无法核验的支出。"),
-                    ui.output_ui("routing_gap_chart"),
-                    class_="chart-container"
-                ),
-                ui.div(
-                    ui.div(
-                        _bh3("💱 Settlement Currency Audit", "💱 结算币种核对表", style="margin: 0;",
-                             ),
-                        ui.download_button(
-                            "download_settlement_audit", "⬇ Excel",
-                            class_="refresh-btn",
-                            style=("background:#5B6CFF !important; color:white !important; "
-                                   "border:none !important; padding:6px 14px !important; "
-                                   "font-size:0.85em !important; width:auto !important; margin:0 !important;")
-                        ),
-                        style="display:flex; justify-content:space-between; align-items:center;"
-                    ),
-                    _bp("Settlement prices arrive in mixed currencies (local for MY/ID/KG/SA/MM/VN, per-product for "
-                        "MX/LK, USD elsewhere). This table shows the currency applied per market and the resulting "
-                        "margin — rows flagged ⚠ have implausible margins and may need a rule adjustment.",
-                        "结算价币种混合（马来西亚/印尼/吉尔吉斯斯坦/沙特/缅甸/越南为当地货币，墨西哥/斯里兰卡按产品判定，"
-                        "其余为美元）。此表显示每个市场应用的币种及毛利率——带⚠的行毛利异常，可能需要调整规则。"),
-                    ui.output_data_frame("settlement_audit_table"),
-                    class_="data-table"
-                ),
-                ui.tags.hr(style="border-color:rgba(91,108,255,0.25); margin:24px 0 16px;"),
-                ui.HTML(
-                    '<div style="display:flex;align-items:center;gap:12px;'
-                    'background:linear-gradient(90deg,rgba(79,70,229,0.10),transparent);'
-                    'border-left:4px solid #4F46E5;border-radius:0 8px 8px 0;'
-                    'padding:12px 18px;margin:4px 0 14px;">'
-                    '<span style="font-size:1.5em;">🇮🇶</span>'
-                    '<div>'
-                    '<div class="lang-en" style="font-weight:700;font-size:1.08em;color:#1E293B;">'
-                    'Iraq Pinstore — Supplier Purchase Planning</div>'
-                    '<div class="lang-zh" style="font-weight:700;font-size:1.08em;color:#1E293B;">'
-                    '伊拉克 Pinstore — 供应商采购计划</div>'
-                    '<div style="font-size:0.8em;color:#64748B;margin-top:2px;">'
-                    'Weekly PIN demand &amp; stock-purchase estimation for the Pinstore supplier (Iraq).</div>'
-                    '</div></div>'
-                ),
-                ui.div(
-                    _bh3("🇮🇶 Iraq Pinstore — Weekly Purchase Planner", "🇮🇶 伊拉克 Pinstore — 周采购计划",
-                         _help("Covers AsiaCell PIN, Zain PIN, Korek PIN orders from Iraq. "
-                               "B2C (Master): product name ends with 'PIN'. "
-                               "B2B (Agent): product_info ends with 'PIN'. "
-                               "Supplier: Pinstore (manual weekly purchase). Iraq has two suppliers: DT & Pinstore.")),
-                    _bp("Estimate how many PINs to purchase this week and this month based on historical order trends.",
-                        "根据历史订单趋势估算本周及本月需要向 Pinstore 采购的PIN数量。"),
-                    ui.output_ui("iraq_pinstore_kpis"),
-                    class_="chart-container"
-                ),
-                ui.div(
-                    _bh3("📊 Iraq PIN Weekly Order Trend (Last 12 Weeks)", "📊 伊拉克PIN订单周趋势（近12周）",
-                         _help("Weekly order volume per PIN SKU. Red dashed line = 4-week rolling average total.")),
-                    _bp("Track each PIN SKU's weekly demand. Seasonal spikes indicate upcoming high-demand periods.",
-                        "追踪每个PIN SKU的每周需求量，季节性峰值提示即将到来的高需求期。"),
-                    ui.output_ui("iraq_pinstore_trend_chart"),
-                    class_="chart-container"
-                ),
-                ui.div(
-                    _bh3("🔥 Iraq Pinstore — Denomination × Operator Heatmap", "🔥 伊拉克 Pinstore — 面值 × 运营商热力图",
-                         _help("Weekly order volume per operator × denomination combination (last 12 weeks). "
-                               "Dark cells = high demand. Use to spot which denominations drive the most volume per operator.")),
-                    _bp("Identify hot denominations per operator to prioritise purchase allocation.",
-                        "识别每个运营商的热门面值，优先安排采购资金。"),
-                    ui.output_ui("iraq_pinstore_denom_heatmap"),
-                    class_="chart-container"
-                ),
-                ui.div(
-                    _bh3("🛒 Iraq Pinstore — Stock Purchase Planner", "🛒 伊拉克 Pinstore — 备货采购计划",
-                         _help("Pieces to buy per operator × denomination for the chosen stock horizon. "
-                               "Pieces = recent daily velocity (last 28 days) × days × 1.10 safety buffer, "
-                               "rounded up. Pick 1 or 2 weeks, or enter a custom number of days.")),
-                    _bp("Pick how many days of stock you want to hold and read the pieces to purchase per "
-                        "denomination per operator. Buffer: +10%. Detailed weekly/monthly estimates remain in the Excel download.",
-                        "选择备货天数，直接读取每个运营商每个面值需采购的张数。安全缓冲+10%。详细的周/月估算仍可在Excel中下载。"),
-                    ui.div(
-                        ui.div(
-                            ui.input_radio_buttons(
-                                "pinstore_horizon", None,
-                                choices={"7": "📅 1 Week (7d)", "14": "📅 2 Weeks (14d)",
-                                         "custom": "✏️ Custom"},
-                                selected="7", inline=True),
-                            ui.panel_conditional(
-                                "input.pinstore_horizon === 'custom'",
-                                ui.input_numeric("pinstore_days", "Days of stock:",
-                                                 value=10, min=1, max=60, width="160px"),
-                            ),
-                            style="display:flex; gap:16px; align-items:center; flex-wrap:wrap;"
-                        ),
-                        ui.download_button(
-                            "download_iraq_pinstore_plan",
-                            "⬇ Detailed Plan (Excel)",
-                            class_="refresh-btn",
-                            style=("background:#5B6CFF!important; color:white!important; "
-                                   "border:none!important; padding:6px 14px!important; "
-                                   "font-size:0.85em!important; width:auto!important;")
-                        ),
-                        style="display:flex; justify-content:space-between; align-items:center; "
-                              "margin-bottom:8px; flex-wrap:wrap; gap:10px;"
-                    ),
-                    ui.output_ui("pinstore_budget_note"),
-                    ui.output_data_frame("pinstore_purchase_matrix"),
-                    class_="data-table"
-                ),
-                _remarks_accordion("supplier_operator_performance"),
             ),
             ui.nav_panel(
                 _bnav("Product & Denomination Analysis", "产品与面值"),
@@ -3230,6 +2951,273 @@ app_ui = ui.page_sidebar(
                 ),
                 _remarks_accordion("product_denomination_analysis"),
             ),
+            ),
+            # ── Operations group: Operational Intel · Supplier & Operator ──
+            ui.nav_menu(
+                _bnav("🏭 Operations", "🏭 运营"),
+            ui.nav_panel(
+                _bnav("Operational Intelligence", "运营智能"),
+                ui.div(
+                    _bh3("📊 Operational KPIs", "📊 运营核心指标"),
+                    _bp("Key operational metrics: Avg Daily Revenue, Avg Daily Orders, Peak Revenue Day, Peak Hour.",
+                        "日均收入、日均订单数、最高收入日及高峰时段等运营核心指标。"),
+                    ui.output_ui("ops_kpis"),
+                    class_="chart-container"
+                ),
+                ui.div(
+                    _bh3("📈 Revenue Velocity — Revenue & Order Volume Trend", "📈 收入速度 — 收入与订单量趋势",
+                         _help("Dual-axis chart: bars = order volume, line = revenue.")),
+                    ui.output_ui("daily_sales_trend"),
+                    class_="chart-container"
+                ),
+                ui.div(
+                    _bh3("📉 Day-over-Day Revenue Change (%)", "📉 日环比收入变化 (%)",
+                         _help("Green = increased; Red = declined vs prior day.")),
+                    _bp("Large negative bars may indicate supplier downtime, payment failures, or market disruptions.",
+                        "大幅负值可能表明供应商宕机、支付失败或市场特定中断。"),
+                    ui.output_ui("daily_delta_chart"),
+                    class_="chart-container"
+                ),
+                ui.div(
+                    _bh3("📅 Order Activity Heatmap (Day of Week × Hour of Day)", "📅 订单活跃度热力图（星期 × 小时）",
+                         _help("Each cell = orders at that day/hour. Use to plan staffing and maintenance.")),
+                    _bp("Identify peak trading hours and low-activity windows for promotions and maintenance.",
+                        "识别高峰交易时段及低活跃窗口，用于安排促销活动和系统维护。"),
+                    ui.output_ui("weekday_sales_chart"),
+                    class_="chart-container"
+                ),
+                _remarks_accordion("operational_intelligence"),
+            ),
+            ui.nav_panel(
+                _bnav("Supplier & Operator Performance", "供应商绩效"),
+                ui.div(
+                    _bh3("🤝 Operator Performance Snapshot", "🤝 供应商绩效快照",
+                         _help("Key metrics anchored to the current filter selection.")),
+                    _bp("KPI snapshot for the period. Use as anchor metrics when negotiating volume discounts and SLA terms.",
+                        "当期 KPI 快照，可用作与各供应商谈判折扣、返利及 SLA 条款的锚点。"),
+                    ui.output_ui("supplier_kpis"),
+                    class_="chart-container"
+                ),
+                ui.div(
+                    _bh3("⚠️ Supplier Concentration Risk", "⚠️ 供应商集中度风险",
+                         _help("Top 3 operators >80% GMV = high supplier concentration risk.")),
+                    _bp("High concentration (>80% from top 3) signals vendor dependency. Target diversification.",
+                        "高集中度（前3供应商占 GMV >80%）表明供应商依赖风险，应推进多元化布局。"),
+                    ui.output_ui("supplier_concentration_card"),
+                    class_="chart-container"
+                ),
+                ui.div(
+                    _bh3("💰 Gross Margin by Operator (Revenue − Cost of Goods)", "💰 各运营商毛利润（收入 − 结算成本）",
+                         _help("Gross Margin = Revenue − Settlement Price. Thin margins are renegotiation targets.")),
+                    _bp("Thin margins indicate pricing pressure or unfavorable settlement terms.",
+                        "毛利润偏低表明定价压力或不利结算条款，应优先重新谈判合同。"),
+                    ui.output_ui("supplier_margin_chart"),
+                    class_="chart-container"
+                ),
+                ui.div(
+                    _bh3("📊 Gross Margin % Trend by Operator", "📊 各运营商毛利率趋势",
+                         _help("Margin % trend. Decline = margin compression, signal to renegotiate.")),
+                    _bp("A downward trend signals deteriorating supplier terms requiring renegotiation.",
+                        "下降趋势表明供应商条款恶化，需重新谈判。"),
+                    ui.output_ui("supplier_margin_pct_trend"),
+                    class_="chart-container"
+                ),
+                ui.div(
+                    _bh3("🥧 Revenue Concentration — Pareto Analysis", "🥧 收入集中度 — 帕累托分析",
+                         _help("Bars = GMV per operator. Red line = cumulative share.")),
+                    _bp("If 3 operators drive 80% of GMV, they are your highest-leverage vendor relationships.",
+                        "若前3家供应商贡献80% GMV，则属于高集中风险，同时也是最具谈判杠杆的关系。"),
+                    ui.output_ui("supplier_pareto"),
+                    class_="chart-container"
+                ),
+                ui.div(
+                    _bh3("📈 Operator Revenue Trend", "📈 运营商收入趋势"),
+                    _bp("Monthly revenue per operator. Identify declining (churn risk) or growing (upsell) operators.",
+                        "各运营商月度收入走势，识别流失风险或增值机会。"),
+                    ui.output_ui("supplier_trend"),
+                    class_="chart-container"
+                ),
+                ui.div(
+                    _bh3("🚀 Top Operators by Revenue (GMV)", "🚀 按收入排名运营商 (GMV)"),
+                    ui.output_ui("operator_sales_chart"),
+                    class_="chart-container"
+                ),
+                ui.div(
+                    _bh3("📦 Top Operators by Order Volume", "📦 按订单量排名运营商"),
+                    ui.output_ui("operator_orders_chart"),
+                    class_="chart-container"
+                ),
+                ui.div(
+                    ui.div(
+                        _bh3("📋 Operator Performance Scorecard (Sortable)", "📋 运营商绩效评分卡（可排序）", style="margin: 0;"),
+                        ui.download_button(
+                            "download_supplier_scorecard", "⬇ Excel",
+                            class_="refresh-btn",
+                            style=("background: #5B6CFF !important; color: white !important; "
+                                   "border: none !important; padding: 6px 14px !important; "
+                                   "font-size: 0.85em !important; width: auto !important; "
+                                   "margin: 0 !important;")
+                        ),
+                        style="display:flex; justify-content:space-between; align-items:center;"
+                    ),
+                    ui.p("Sort by Gross Margin, GMV, AOV, or Period-over-Period Growth to prepare negotiation briefs. "
+                         "Download to Excel with filters embedded in the filename.",
+                         style="color:#64748B; margin-top:8px;"),
+                    ui.output_data_frame("supplier_scorecard"),
+                    class_="data-table"
+                ),
+                ui.div(
+                    _bh3("💹 Gross Margin by Product Category", "💹 各产品类别毛利润",
+                         _help("Revenue vs cost (settlement price) breakdown by product category. "
+                               "Requires settlement_price data. "
+                               "Margin % shown above each bar.")),
+                    _bp("Compare margin rates across product categories to identify which categories drive the most profit.",
+                        "比较各产品类别的毛利率，识别利润贡献最高的类别。"),
+                    ui.output_ui("margin_by_category_chart"),
+                    class_="chart-container"
+                ),
+                # ══ Fulfillment & Routing Health ══════════════════════════
+                ui.HTML(
+                    '<div style="display:flex;align-items:center;gap:12px;'
+                    'background:linear-gradient(90deg,rgba(245,158,11,0.10),transparent);'
+                    'border-left:4px solid #F59E0B;border-radius:0 8px 8px 0;'
+                    'padding:12px 18px;margin:18px 0 14px;">'
+                    '<span style="font-size:1.5em;">🔌</span>'
+                    '<div>'
+                    '<div class="lang-en" style="font-weight:700;font-size:1.08em;color:#1E293B;">'
+                    'Fulfillment &amp; Routing Health</div>'
+                    '<div class="lang-zh" style="font-weight:700;font-size:1.08em;color:#1E293B;">'
+                    '履约与路由健康度</div>'
+                    '<div style="font-size:0.8em;color:#64748B;margin-top:2px;">'
+                    'Supplier order-id coverage (接口商订单号), PIN delivery, payment gateway mix</div>'
+                    '</div></div>'
+                ),
+                ui.div(
+                    _bh3("🩺 Fulfillment KPIs", "🩺 履约核心指标",
+                         _help("Routing coverage = orders carrying a supplier-side order id (接口商订单号). "
+                               "Successful orders without one are a reconciliation risk.")),
+                    _bp("Orders marked successful but missing the supplier order id cannot be reconciled against supplier statements.",
+                        "标记成功却缺少接口商订单号的订单无法与供应商账单对账。"),
+                    ui.output_ui("fulfillment_kpis"),
+                    class_="chart-container"
+                ),
+                ui.div(
+                    _bh3("⚠ Successful Orders Missing Supplier Order ID", "⚠ 缺少接口商订单号的成功订单",
+                         _help("By operator — these orders were charged as successful but have no supplier-side "
+                               "reference, so they can't be matched in reconciliation.")),
+                    _bp("Escalate operators with persistent routing gaps — every order here is unverifiable spend.",
+                        "对持续存在路由缺口的运营商进行升级处理——这里的每一单都是无法核验的支出。"),
+                    ui.output_ui("routing_gap_chart"),
+                    class_="chart-container"
+                ),
+                ui.div(
+                    ui.div(
+                        _bh3("💱 Settlement Currency Audit", "💱 结算币种核对表", style="margin: 0;",
+                             ),
+                        ui.download_button(
+                            "download_settlement_audit", "⬇ Excel",
+                            class_="refresh-btn",
+                            style=("background:#5B6CFF !important; color:white !important; "
+                                   "border:none !important; padding:6px 14px !important; "
+                                   "font-size:0.85em !important; width:auto !important; margin:0 !important;")
+                        ),
+                        style="display:flex; justify-content:space-between; align-items:center;"
+                    ),
+                    _bp("Settlement prices arrive in mixed currencies (local for MY/ID/KG/SA/MM/VN, per-product for "
+                        "MX/LK, USD elsewhere). This table shows the currency applied per market and the resulting "
+                        "margin — rows flagged ⚠ have implausible margins and may need a rule adjustment.",
+                        "结算价币种混合（马来西亚/印尼/吉尔吉斯斯坦/沙特/缅甸/越南为当地货币，墨西哥/斯里兰卡按产品判定，"
+                        "其余为美元）。此表显示每个市场应用的币种及毛利率——带⚠的行毛利异常，可能需要调整规则。"),
+                    ui.output_data_frame("settlement_audit_table"),
+                    class_="data-table"
+                ),
+                ui.tags.hr(style="border-color:rgba(91,108,255,0.25); margin:24px 0 16px;"),
+                ui.HTML(
+                    '<div style="display:flex;align-items:center;gap:12px;'
+                    'background:linear-gradient(90deg,rgba(79,70,229,0.10),transparent);'
+                    'border-left:4px solid #4F46E5;border-radius:0 8px 8px 0;'
+                    'padding:12px 18px;margin:4px 0 14px;">'
+                    '<span style="font-size:1.5em;">🇮🇶</span>'
+                    '<div>'
+                    '<div class="lang-en" style="font-weight:700;font-size:1.08em;color:#1E293B;">'
+                    'Iraq Pinstore — Supplier Purchase Planning</div>'
+                    '<div class="lang-zh" style="font-weight:700;font-size:1.08em;color:#1E293B;">'
+                    '伊拉克 Pinstore — 供应商采购计划</div>'
+                    '<div style="font-size:0.8em;color:#64748B;margin-top:2px;">'
+                    'Weekly PIN demand &amp; stock-purchase estimation for the Pinstore supplier (Iraq).</div>'
+                    '</div></div>'
+                ),
+                ui.div(
+                    _bh3("🇮🇶 Iraq Pinstore — Weekly Purchase Planner", "🇮🇶 伊拉克 Pinstore — 周采购计划",
+                         _help("Covers AsiaCell PIN, Zain PIN, Korek PIN orders from Iraq. "
+                               "B2C (Master): product name ends with 'PIN'. "
+                               "B2B (Agent): product_info ends with 'PIN'. "
+                               "Supplier: Pinstore (manual weekly purchase). Iraq has two suppliers: DT & Pinstore.")),
+                    _bp("Estimate how many PINs to purchase this week and this month based on historical order trends.",
+                        "根据历史订单趋势估算本周及本月需要向 Pinstore 采购的PIN数量。"),
+                    ui.output_ui("iraq_pinstore_kpis"),
+                    class_="chart-container"
+                ),
+                ui.div(
+                    _bh3("📊 Iraq PIN Weekly Order Trend (Last 12 Weeks)", "📊 伊拉克PIN订单周趋势（近12周）",
+                         _help("Weekly order volume per PIN SKU. Red dashed line = 4-week rolling average total.")),
+                    _bp("Track each PIN SKU's weekly demand. Seasonal spikes indicate upcoming high-demand periods.",
+                        "追踪每个PIN SKU的每周需求量，季节性峰值提示即将到来的高需求期。"),
+                    ui.output_ui("iraq_pinstore_trend_chart"),
+                    class_="chart-container"
+                ),
+                ui.div(
+                    _bh3("🔥 Iraq Pinstore — Denomination × Operator Heatmap", "🔥 伊拉克 Pinstore — 面值 × 运营商热力图",
+                         _help("Weekly order volume per operator × denomination combination (last 12 weeks). "
+                               "Dark cells = high demand. Use to spot which denominations drive the most volume per operator.")),
+                    _bp("Identify hot denominations per operator to prioritise purchase allocation.",
+                        "识别每个运营商的热门面值，优先安排采购资金。"),
+                    ui.output_ui("iraq_pinstore_denom_heatmap"),
+                    class_="chart-container"
+                ),
+                ui.div(
+                    _bh3("🛒 Iraq Pinstore — Stock Purchase Planner", "🛒 伊拉克 Pinstore — 备货采购计划",
+                         _help("Pieces to buy per operator × denomination for the chosen stock horizon. "
+                               "Pieces = recent daily velocity (last 28 days) × days × 1.10 safety buffer, "
+                               "rounded up. Pick 1 or 2 weeks, or enter a custom number of days.")),
+                    _bp("Pick how many days of stock you want to hold and read the pieces to purchase per "
+                        "denomination per operator. Buffer: +10%. Detailed weekly/monthly estimates remain in the Excel download.",
+                        "选择备货天数，直接读取每个运营商每个面值需采购的张数。安全缓冲+10%。详细的周/月估算仍可在Excel中下载。"),
+                    ui.div(
+                        ui.div(
+                            ui.input_radio_buttons(
+                                "pinstore_horizon", None,
+                                choices={"7": "📅 1 Week (7d)", "14": "📅 2 Weeks (14d)",
+                                         "custom": "✏️ Custom"},
+                                selected="7", inline=True),
+                            ui.panel_conditional(
+                                "input.pinstore_horizon === 'custom'",
+                                ui.input_numeric("pinstore_days", "Days of stock:",
+                                                 value=10, min=1, max=60, width="160px"),
+                            ),
+                            style="display:flex; gap:16px; align-items:center; flex-wrap:wrap;"
+                        ),
+                        ui.download_button(
+                            "download_iraq_pinstore_plan",
+                            "⬇ Detailed Plan (Excel)",
+                            class_="refresh-btn",
+                            style=("background:#5B6CFF!important; color:white!important; "
+                                   "border:none!important; padding:6px 14px!important; "
+                                   "font-size:0.85em!important; width:auto!important;")
+                        ),
+                        style="display:flex; justify-content:space-between; align-items:center; "
+                              "margin-bottom:8px; flex-wrap:wrap; gap:10px;"
+                    ),
+                    ui.output_ui("pinstore_budget_note"),
+                    ui.output_data_frame("pinstore_purchase_matrix"),
+                    class_="data-table"
+                ),
+                _remarks_accordion("supplier_operator_performance"),
+            ),
+            ),
+            # ── Customers group: Customer Analytics · Marketing ────────────
+            ui.nav_menu(
+                _bnav("👥 Customers", "👥 客户"),
             ui.nav_panel(
                 _bnav("Customer Analytics", "客户分析"),
                 # ══ B2B Agent Analytics section header ═══════════════════
@@ -3489,7 +3477,10 @@ app_ui = ui.page_sidebar(
                 ),
                 _remarks_accordion("marketing_promotions"),
             ),
-            # ── Sales Explorer Tab (ad-hoc time-window query) ─────────────
+            ),
+            # ── Tools group: Sales Explorer · AI Predictions · Guideline ──
+            ui.nav_menu(
+                _bnav("🧰 Tools", "🧰 工具"),
             ui.nav_panel(
                 _bnav("⏱ Sales Explorer", "⏱ 时段销售查询"),
                 ui.HTML(
@@ -3736,6 +3727,7 @@ app_ui = ui.page_sidebar(
             ui.nav_panel(
                 _bnav("📖 Guideline", "📖 使用指南"),
                 *_guideline_children(),
+            ),
             ),
         ),
         style="padding: 20px;"
@@ -5360,10 +5352,7 @@ def server(input, output, session):
             style="display: flex; flex-wrap: wrap; gap: 12px;"
         )
 
-    # ── Boss view: hero KPI band + auto executive summary ────────────────────
-    # Builder functions (not renders) so BOTH the Executive Overview and the
-    # 老板视图 tab can show them — Shiny output ids must be unique per tab, so
-    # each tab gets a thin @render.ui wrapper calling the shared builder.
+    # ── Overview: hero KPI band + auto executive summary (shared builders) ────
 
     def _country_movers():
         """(riser_name, riser_pct, decliner_name, decliner_pct) with the ≥500
@@ -5484,19 +5473,9 @@ def server(input, output, session):
     def exec_hero_band():
         return _hero_cards()
 
-    @render.ui
-    @safe_render
-    def boss_summary_line():
-        return _exec_summary()
-
-    @render.ui
-    @safe_render
-    def boss_hero_band():
-        return _hero_cards()
-
     def _movers_cards():
         """Mini-cards: top riser, top decliner, top product/operator — shared by
-        the Executive Overview strip and the Boss view."""
+        the Overview movers strip."""
         df = filtered_data()
         prev = previous_period_data()
         if 'sales' not in df.columns:
@@ -5579,90 +5558,6 @@ def server(input, output, session):
     @safe_render
     def top_movers_strip():
         return _movers_cards()
-
-    @render.ui
-    @safe_render
-    def boss_movers():
-        return _movers_cards()
-
-    @render.ui
-    @safe_render
-    def boss_trend():
-        """Compact GMV trend for the Boss one-pager (auto granularity, ~320px)."""
-        df = filtered_data()
-        if 'order_time' not in df.columns or 'sales' not in df.columns or not len(df):
-            return _no_data()
-        currency = currency_converter(); symbol = currency['symbol']
-        span_days = (df['order_time'].max() - df['order_time'].min()).days
-        if span_days <= 62:
-            grouped = df.groupby(df['order_time'].dt.date)['sales'].sum()
-        elif span_days <= 200:
-            grouped = df.groupby(df['order_time'].dt.to_period('W').dt.start_time)['sales'].sum()
-        else:
-            grouped = df.groupby(df['order_time'].dt.to_period('M').dt.start_time)['sales'].sum()
-        s = grouped.mul(currency['rate'])
-        fig = go.Figure(go.Scatter(
-            x=list(s.index), y=list(s.values), mode='lines',
-            line=dict(color=T.PRIMARY, width=2.5, shape='spline'),
-            fill='tozeroy', fillcolor='rgba(91,108,255,0.10)',
-            hovertemplate='<b>%{x|%Y-%m-%d}</b><br>' + symbol + '%{y:,.0f}<extra></extra>',
-        ))
-        T.apply_theme(fig, title=_tt("Revenue Trend"), height=320, showlegend=False,
-                      margin=dict(l=10, r=10, t=45, b=10))
-        return ui.HTML(T.fig_to_html(fig))
-
-    @render.ui
-    @safe_render
-    def boss_top5():
-        """Compact Top-5 markets bar for the Boss one-pager (click-to-drill)."""
-        df = filtered_data()
-        if 'country' not in df.columns or 'sales' not in df.columns or not len(df):
-            return _no_data()
-        currency = currency_converter(); sym = currency['symbol']
-        top = (df.groupby('country', observed=True)['sales'].sum()
-                 .mul(currency['rate']).nlargest(5).iloc[::-1])
-        fig = charts.topn_hbar(
-            values=list(top.values), labels=[str(c) for c in top.index],
-            title=_tt("Top 5 Markets"), xaxis_title=None,
-            hover_label='Sales: ' + sym + '%{x:,.0f}',
-            value_text=[T.format_number(v, sym) for v in top.values],
-            height=320)
-        fig.update_layout(meta={"drill": "country"})
-        return ui.HTML(T.fig_to_html(fig))
-
-    @render.ui
-    @safe_render
-    def boss_alerts_mini():
-        """Compact alert digest for the Boss one-pager: counts + worst slips."""
-        a = alerts_data()
-        if not a:
-            return _no_data()
-        sym = a.get('symbol', '¥')
-        n_slip = len(a.get('slip_ops', [])) + len(a.get('slip_cos', []))
-        n_surge = len(a.get('surge_ops', [])) + len(a.get('surge_cos', []))
-        wk = a.get('week_pct')
-        wk_s = T.format_pct(wk) if wk is not None else "—"
-        rows = [ui.tags.div(
-            ui.tags.span(f"Week {T.format_number(a.get('rec_total', 0), sym)} ",
-                         style="font-weight:700; color:#0F172A;"),
-            ui.tags.span(f"({wk_s} WoW)", style=f"color:{T.delta_color(wk)}; font-weight:600;"),
-            ui.tags.span(f"  ·  🔻 {n_slip} slipping  ·  🔺 {n_surge} surging",
-                         style="color:#475569;"),
-            style="margin-bottom:8px; font-size:0.95em;")]
-        slips = a.get('slip_cos')
-        if slips is not None and len(slips):
-            for name, r in slips.head(3).iterrows():
-                rows.append(ui.tags.div(
-                    f"🔻 {name}: {T.format_pct(r['pct'])} vs baseline",
-                    style="font-size:0.85em; color:#B91C1C; margin-bottom:3px;"))
-        else:
-            rows.append(ui.tags.div("✓ No market slipping >20% vs baseline",
-                                    style="font-size:0.85em; color:#047857;"))
-        rows.append(ui.tags.div(
-            ui.tags.span("Full detail → Executive Overview alerts", class_="lang-en"),
-            ui.tags.span("完整明细 → 执行概览·异常预警", class_="lang-zh"),
-            style="font-size:0.75em; color:#94A3B8; margin-top:6px;"))
-        return ui.tags.div(*rows)
 
     @render.ui
     @safe_render
@@ -11455,7 +11350,7 @@ def server(input, output, session):
 
         tab_data = [
             {
-                "tab": "Executive Overview",
+                "tab": "Overview",
                 "kpis": [
                     ("Total Revenue (GMV)", T.format_number(total_sales, sym), None),
                     ("Order Volume", T.format_int(total_orders), None),
