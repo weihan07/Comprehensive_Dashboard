@@ -1523,6 +1523,23 @@ def _bnav(en_text: str, zh_text: str):
     )
 
 
+def _more_details(en_title: str, zh_title: str, *children):
+    """Collapsed group for secondary charts (same style as the Overview's
+    Detailed KPI Breakdown). Hidden outputs are suspended by Shiny, so charts
+    inside don't compute until the group is expanded — tabs load faster."""
+    return ui.tags.details(
+        ui.tags.summary(
+            ui.tags.span(en_title, class_="lang-en"),
+            ui.tags.span(zh_title, class_="lang-zh"),
+            style=("cursor: pointer; font-weight: 600; padding: 10px 14px; "
+                   "background: #EEF0FF; color: #5B6CFF; border-radius: 8px; "
+                   "margin: 16px 8px 0 8px; user-select: none; list-style: none; "
+                   "border: 1px solid #C7D2FE;")
+        ),
+        *children,
+    )
+
+
 def _bl(en: str, zh: str):
     """Bilingual inline label usable in module-level UI (CSS body[data-lang]).
     The server defines a local `_bl` with identical behaviour for use inside
@@ -1581,10 +1598,8 @@ _GUIDELINE_TABS = [
     ]),
     ("🌍", "Market Intelligence", "市场洞察", [
         ("🗺️ Global Revenue Distribution", "🗺️ 全球收入分布", "Choropleth map", "Revenue intensity by country worldwide.", "全球各国营业额强度。"),
-        ("🚀 Risers vs 📉 Decliners", "🚀 增长 vs 📉 下滑", "Table", "Fastest-growing/declining markets.", "增长/下滑最快的市场。"),
-        ("🌍 Top Markets by Revenue/Orders/客单价", "🌍 市场排名 收入/订单/客单价", "Bars (H)", "Market rankings on each dimension.", "各维度市场排名。"),
+        ("🌍 Top Markets by Revenue", "🌍 市场收入排名", "Bar (H)", "Top-15 by GMV (orders/AOV in the scorecard).", "按营业额前15（订单/客单价见评分卡）。"),
         ("💎 Market Opportunity Matrix", "💎 市场机会矩阵", "Bubble scatter", "Volume × 客单价 × GMV — where to invest.", "订单量 × 客单价 × 营业额 — 投资方向。"),
-        ("🧭 Market Expansion Radar", "🧭 市场拓展雷达", "Quadrant scatter", "Core/Upsell/Growth/Long-tail.", "核心/增购/增长/长尾 分类。"),
         ("📅 Monthly Revenue Heatmap (Top 15)", "📅 月度收入热力图（前15）", "Heatmap", "Seasonality & momentum per market.", "各市场季节性与势头。"),
         ("📊 Orders by Market × Segment", "📊 各市场×分部订单", "Stacked bar", "B2B/B2C mix per top market.", "各市场 B2B/B2C 结构。"),
         ("📋 Market KPI Scorecard", "📋 市场指标评分卡", "Table (Excel)", "Full per-market KPI export.", "各市场完整指标导出。"),
@@ -1600,8 +1615,6 @@ _GUIDELINE_TABS = [
         ("🤝 Operator Snapshot", "🤝 运营商快照", "KPI cards", "GMV/orders/客单价/margin/Top-3 conc.", "营业额/订单/客单价/毛利/前3集中度。"),
         ("⚠️ Supplier Concentration Risk", "⚠️ 供应商集中度风险", "KPI flag", "Top-3 operator share (🔴 if >80%).", "前3运营商占比（>80% 标红）。"),
         ("💰 Gross Margin by Operator / 📈 Margin % Trend", "💰 各运营商毛利 / 📈 毛利率趋势", "Bar & lines", "Absolute & rate margin per operator.", "各运营商毛利额与毛利率。"),
-        ("🥧 Revenue Pareto", "🥧 收入帕累托", "Bar + cum. line", "How few operators drive most revenue.", "少数运营商贡献大部分收入。"),
-        ("🚀 Top Operators by Revenue / Orders", "🚀 运营商排名 收入/订单", "Bars", "Operator rankings & momentum.", "运营商排名与势头。"),
         ("📋 Operator Scorecard", "📋 运营商评分卡", "Table (Excel)", "Full per-operator KPIs.", "各运营商完整指标。"),
         ("💹 Gross Margin by Product Category", "💹 各产品类别毛利", "Bar", "Which categories are most profitable.", "哪些类别最赚钱。"),
         ("🩺 Fulfillment / ⚠ Missing Supplier Order ID", "🩺 履约 / ⚠ 缺接口商订单号", "KPI + bar", "Routing coverage & reconciliation risk.", "路由覆盖率与对账风险。"),
@@ -1618,7 +1631,7 @@ _GUIDELINE_TABS = [
         ("💵 Airtime by Denomination / × Operator", "💵 话费 各面值 / ×运营商", "Bars", "充话费: which top-up values sell.", "充话费：各面值销量。"),
         ("⏰ Peak Hours / Denomination × Operator", "⏰ 高峰时段 / 面值×运营商", "Heatmaps", "When & what denominations are bought.", "何时购买、买什么面值。"),
         ("📋 Denomination & Product scorecards", "📋 面值与产品评分卡", "Tables (Excel)", "Full denomination/product KPIs.", "面值/产品完整指标。"),
-        ("📊 Operator × Category mix", "📊 运营商×类别结构", "Stacked bars + pivot", "Each operator's product spread.", "各运营商的产品分布。"),
+        ("📊 Operator × Category pivot", "📊 运营商×类别汇总表", "Pivot table", "Each operator's product spread.", "各运营商的产品分布。"),
     ]),
     ("👥", "Customer Analytics", "客户分析", [
         ("🏢 B2B Agent Snapshot / Top 20 / Table", "🏢 B2B代理快照 / 前20 / 表", "KPI, bar, table", "Agent revenue concentration & ranking.", "代理商收入集中度与排名。"),
@@ -2353,21 +2366,6 @@ app_ui = ui.page_sidebar(
                     class_="chart-container"
                 ),
                 ui.div(
-                    _bh3("📦 Order Volume by Customer Segment", "📦 各客户分类订单量"),
-                    _bp("Number of unique orders placed by B2B vs B2C customers.",
-                        "B2B 与 B2C 客户的独立订单数量对比。"),
-                    ui.output_ui("orders_segment_chart"),
-                    class_="chart-container"
-                ),
-                ui.div(
-                    _bh3("💎 Average Order Value (AOV) by Customer Segment", "💎 各客户分类客单价 (AOV)",
-                         _help("AOV = Total Revenue ÷ Total Orders for each segment.")),
-                    _bp("Higher AOV signals stronger per-transaction value; guide pricing strategy and promotions.",
-                        "高 AOV 代表每笔交易价值更强，用于指导定价策略和分部促销活动。"),
-                    ui.output_ui("aov_by_segment_chart"),
-                    class_="chart-container"
-                ),
-                ui.div(
                     _bh3("📋 Revenue & Order Volume by Market (GMV)", "📋 各市场收入与订单量 (GMV)"),
                     _bp("Detailed breakdown by market and customer segment.",
                         "按市场和客户分类的详细拆解，完整市场排名请查看「市场洞察」。"),
@@ -2401,13 +2399,6 @@ app_ui = ui.page_sidebar(
                     class_="chart-container"
                 ),
                 ui.div(
-                    _bh3("📊 Order Count by Status × Segment", "📊 各状态 × 客户分类订单量"),
-                    _bp("Compare how B2B and B2C orders distribute across success, refund, and cancellation.",
-                        "对比 B2B 与 B2C 订单在成功、退款、取消之间的分布。"),
-                    ui.output_ui("order_status_breakdown_chart"),
-                    class_="chart-container"
-                ),
-                ui.div(
                     _bh3("📉 Monthly Refund Rate Trend", "📉 月度退款率趋势",
                          _help("Refunded orders ÷ total orders per month, per segment. "
                                "A rising line signals supplier or product quality issues.")),
@@ -2424,6 +2415,31 @@ app_ui = ui.page_sidebar(
                         "用于供应商考核——退款率持续偏高的运营商需要升级处理或切换通道。"),
                     ui.output_ui("refund_by_operator_chart"),
                     class_="chart-container"
+                ),
+                _more_details(
+                    "📦 Segment & status detail", "📦 分类与状态明细",
+                ui.div(
+                    _bh3("📦 Order Volume by Customer Segment", "📦 各客户分类订单量"),
+                    _bp("Number of unique orders placed by B2B vs B2C customers.",
+                        "B2B 与 B2C 客户的独立订单数量对比。"),
+                    ui.output_ui("orders_segment_chart"),
+                    class_="chart-container"
+                ),
+                ui.div(
+                    _bh3("💎 Average Order Value (AOV) by Customer Segment", "💎 各客户分类客单价 (AOV)",
+                         _help("AOV = Total Revenue ÷ Total Orders for each segment.")),
+                    _bp("Higher AOV signals stronger per-transaction value; guide pricing strategy and promotions.",
+                        "高 AOV 代表每笔交易价值更强，用于指导定价策略和分部促销活动。"),
+                    ui.output_ui("aov_by_segment_chart"),
+                    class_="chart-container"
+                ),
+                ui.div(
+                    _bh3("📊 Order Count by Status × Segment", "📊 各状态 × 客户分类订单量"),
+                    _bp("Compare how B2B and B2C orders distribute across success, refund, and cancellation.",
+                        "对比 B2B 与 B2C 订单在成功、退款、取消之间的分布。"),
+                    ui.output_ui("order_status_breakdown_chart"),
+                    class_="chart-container"
+                ),
                 ),
                 _remarks_accordion("revenue_orders"),
             ),
@@ -2464,32 +2480,10 @@ app_ui = ui.page_sidebar(
                     class_="chart-container"
                 ),
                 ui.div(
-                    _bh3("🚀 Revenue Momentum: Top Risers vs 📉 Top Decliners", "🚀 收入动能：增长最快 vs 📉 下滑最大"),
-                    _bp("Markets with the largest revenue movement vs an equally-long prior period.",
-                        "与前等长周期相比收入变化最大的市场，下滑代表留存或定价风险。"),
-                    ui.output_ui("country_growth_table"),
-                    class_="chart-container"
-                ),
-                ui.div(
                     _bh3("🌍 Top Markets by Revenue (GMV)", "🌍 按收入排名前15市场 (GMV)"),
                     _bp("Top 15 markets ranked by total Gross Merchandise Value for the selected period.",
                         "所选周期内按 GMV 排名的前15个市场。"),
                     ui.output_ui("country_sales_chart"),
-                    class_="chart-container"
-                ),
-                ui.div(
-                    _bh3("📦 Top Markets by Order Volume", "📦 按订单量排名前15市场"),
-                    _bp("Top 15 markets by order count. High volume with low AOV signals upsell potential.",
-                        "高订单量但低 AOV 的市场是增值销售机会。"),
-                    ui.output_ui("country_orders_chart"),
-                    class_="chart-container"
-                ),
-                ui.div(
-                    _bh3("💎 Average Order Value (AOV) by Market", "💎 各市场客单价 (AOV)",
-                         _help("AOV = Revenue ÷ Orders per market.")),
-                    _bp("Markets sorted by AOV. Pair with order volume to identify upsell vs. penetration opportunities.",
-                        "按 AOV 降序排列。结合订单量可识别增值销售与市场渗透机会。"),
-                    ui.output_ui("country_aov_chart"),
                     class_="chart-container"
                 ),
                 ui.div(
@@ -2501,25 +2495,9 @@ app_ui = ui.page_sidebar(
                     class_="chart-container"
                 ),
                 ui.div(
-                    _bh3("🧭 Market Expansion Radar — Strategic Quadrant Classification", "🧭 市场拓展雷达 — 战略四象限",
-                         _help("Markets classified by Order Volume and AOV vs median.")),
-                    _bp("Classifies every market into four strategic quadrants based on volume and AOV.",
-                        "核心市场(高量高价)、增值机会(高量低价)、成长市场(低量高价)、长尾(低量低价)。"),
-                    ui.output_ui("country_expansion_radar"),
-                    ui.output_ui("country_expansion_quadrant_tables"),
-                    class_="chart-container"
-                ),
-                ui.div(
                     _bh3("📅 Monthly Revenue Heatmap by Market (Top 15)", "📅 各市场月度收入热力图（前15）",
                          _help("Each cell shows revenue for a market × month. Use to spot seasonal patterns.")),
                     ui.output_ui("country_month_heatmap"),
-                    class_="chart-container"
-                ),
-                ui.div(
-                    _bh3("📊 Order Volume by Market and Customer Segment", "📊 各市场订单量（按客户分类）"),
-                    _bp("Stacked bar: B2B vs B2C order split per market — reveals channel mix by geography.",
-                        "堆叠柱状图：每个市场的 B2B vs B2C 订单拆分，揭示各市场渠道结构。"),
-                    ui.output_ui("country_orders_by_segment_chart"),
                     class_="chart-container"
                 ),
                 ui.div(
@@ -2540,6 +2518,24 @@ app_ui = ui.page_sidebar(
                          style="color:#64748B; font-size:0.88em; margin-top:8px;"),
                     ui.output_data_frame("country_summary_table"),
                     class_="data-table"
+                ),
+                ui.div(
+                    _bh3("🔀 Billing vs Destination Mismatch", "🔀 下单市场 vs 充值目的地错配",
+                         _help("Orders where the billing/order country differs from the destination calling-code "
+                               "country = cross-border gifting / remittance-style usage.")),
+                    _bp("High mismatch share = diaspora/remittance demand — a marketing segment of its own.",
+                        "错配占比高 = 侨汇/跨境代充需求，可作为独立营销客群。"),
+                    ui.output_ui("destination_mismatch_chart"),
+                    class_="chart-container"
+                ),
+                _more_details(
+                    "📦 More market detail", "📦 更多市场明细",
+                ui.div(
+                    _bh3("📊 Order Volume by Market and Customer Segment", "📊 各市场订单量（按客户分类）"),
+                    _bp("Stacked bar: B2B vs B2C order split per market — reveals channel mix by geography.",
+                        "堆叠柱状图：每个市场的 B2B vs B2C 订单拆分，揭示各市场渠道结构。"),
+                    ui.output_ui("country_orders_by_segment_chart"),
+                    class_="chart-container"
                 ),
                 ui.div(
                     _bh3("💲 Avg Recharge Denomination by Market", "💲 各市场平均充值面值",
@@ -2578,15 +2574,6 @@ app_ui = ui.page_sidebar(
                     class_="chart-container"
                 ),
                 ui.div(
-                    _bh3("🔀 Billing vs Destination Mismatch", "🔀 下单市场 vs 充值目的地错配",
-                         _help("Orders where the billing/order country differs from the destination calling-code "
-                               "country = cross-border gifting / remittance-style usage.")),
-                    _bp("High mismatch share = diaspora/remittance demand — a marketing segment of its own.",
-                        "错配占比高 = 侨汇/跨境代充需求，可作为独立营销客群。"),
-                    ui.output_ui("destination_mismatch_chart"),
-                    class_="chart-container"
-                ),
-                ui.div(
                     _bh3("📱 Beneficiary Numbers — Reach & Stickiness", "📱 受益号码 — 触达与黏性",
                          _help("Unique recharge numbers (充值号码) = actual end-beneficiaries. "
                                "Numbers-per-user > 3 suggests reseller behaviour in B2C.")),
@@ -2594,6 +2581,7 @@ app_ui = ui.page_sidebar(
                         "订单数是交易量，唯一号码数是触达人数。两者差距揭示复充行为与代充客户。"),
                     ui.output_ui("beneficiary_analysis"),
                     class_="chart-container"
+                ),
                 ),
                 _remarks_accordion("market_intelligence"),
             ),
@@ -2666,13 +2654,6 @@ app_ui = ui.page_sidebar(
                     class_="chart-container"
                 ),
                 ui.div(
-                    _bh3("📈 Monthly Revenue Trend by Category (Top 6)", "📈 各类别月度收入趋势（前6）"),
-                    _bp("Track how each product line grows or declines over time.",
-                        "跟踪各产品线随时间的增长或下滑。"),
-                    ui.output_ui("category_monthly_trend_chart"),
-                    class_="chart-container"
-                ),
-                ui.div(
                     _bh3("🌳 Product Revenue Mix (Treemap)", "🌳 产品收入结构（树图）",
                          _help("Hierarchical view sized by GMV. Larger = higher revenue contribution.")),
                     _bp("Visualise your product portfolio. Use to identify concentration risk and diversification opportunities.",
@@ -2681,34 +2662,68 @@ app_ui = ui.page_sidebar(
                     class_="chart-container"
                 ),
                 ui.div(
-                    _bh3("📈 Top 5 Products — Revenue Trend", "📈 前5产品收入趋势",
-                         _help("Month-over-month revenue for top 5 products. Declining = lifecycle maturity.")),
-                    _bp("Track product revenue trajectories. Declining products may need promotion or indicate substitution.",
-                        "追踪产品收入走势，下降产品可能需要促销支持或表明市场替代。"),
-                    ui.output_ui("product_revenue_trend"),
-                    class_="chart-container"
-                ),
-                ui.div(
                     _bh3("📦 Top Products by Revenue (GMV)", "📦 按收入排名产品 (GMV)"),
                     ui.output_ui("product_sales_chart"),
                     class_="chart-container"
                 ),
+                # ── End of Data Package section ──────────────────────────
+                # ══ Airtime / Top-up Denominations ════════════════════════
+                ui.HTML(
+                    '<div style="display:flex;align-items:center;gap:12px;'
+                    'background:linear-gradient(90deg,rgba(16,185,129,0.10),transparent);'
+                    'border-left:4px solid #10B981;border-radius:0 8px 8px 0;'
+                    'padding:12px 18px;margin:18px 0 14px;">'
+                    '<span style="font-size:1.5em;">📱</span>'
+                    '<div>'
+                    '<div class="lang-en" style="font-weight:700;font-size:1.08em;color:#1E293B;">'
+                    'Airtime / Top-up Denomination Sales</div>'
+                    '<div class="lang-zh" style="font-weight:700;font-size:1.08em;color:#1E293B;">'
+                    '话费充值面值销售分析</div>'
+                    '<div style="font-size:0.8em;color:#64748B;margin-top:2px;">'
+                    'Sales per denomination for airtime/top-up products (充话费 / 后付费 / PIN码话费)</div>'
+                    '</div></div>'
+                ),
                 ui.div(
-                    _bh3("📊 Top Products by Customer Segment", "📊 按客户分类的产品排名"),
-                    _bp("Revenue per product split by B2B and B2C. Reveals channel-product affinity.",
-                        "各产品按 B2B 和 B2C 分类的收入贡献，揭示渠道-产品亲和性。"),
-                    ui.output_ui("product_segment_chart"),
+                    _bh3("💵 Airtime Sales by Denomination", "💵 话费各面值销量",
+                         _help("Orders and revenue per denomination for airtime/top-up categories. "
+                               "Labels use the SKU name (e.g. RM 50, 100000 Rp) when available.")),
+                    _bp("Which face values customers actually buy — guides which denominations to stock and promote.",
+                        "客户实际购买的面值分布——指导面值备货与促销重点。"),
+                    ui.output_ui("airtime_denomination_chart"),
                     class_="chart-container"
                 ),
                 ui.div(
-                    _bh3("💵 Recharge Denomination Band Revenue Contribution (%)", "💵 充值面值档位收入贡献率 (%)",
-                         _help("Revenue by denomination band: Low (<10), Mid (10-50), High (>50) in base currency. "
-                               "Airtime & Bill Payment only — denomination is the face value / bill amount.")),
-                    _bp("Which face-value tier (Low/Mid/High) drives the most GMV? Filter to 'Airtime' or 'Bill' category for clean results.",
-                        "哪个面值档位（低/中/高）贡献最多 GMV？筛选到'话费'或'账单'类别可获得更清晰的分析结果。"),
-                    ui.output_ui("denomination_contribution_chart"),
-                    class_="chart-container"
+                    _bh3("📋 Product Summary", "📋 产品汇总"),
+                    ui.output_data_frame("product_summary_table"),
+                    class_="data-table"
                 ),
+                ui.div(
+                    _bh3("📋 Operator × Product Category Pivot Table", "📋 运营商 × 产品类别汇总表",
+                         _help("Full pivot: each row = operator, columns = product categories. "
+                               "Shows Revenue (GMV), Orders, and AOV per cell. "
+                               "Toggle between Revenue view and Orders view.")),
+                    _bp("Comprehensive cross-reference of every operator by product type. Download as Excel for detailed analysis.",
+                        "每个运营商按产品类别的完整交叉分析表。可下载为Excel进行详细分析。"),
+                    ui.div(
+                        ui.input_radio_buttons(
+                            "op_cat_metric", None,
+                            choices={"revenue": "💰 Revenue (GMV)", "orders": "📦 Orders", "aov": "💎 AOV"},
+                            selected="revenue", inline=True,
+                        ),
+                        ui.download_button(
+                            "download_op_category_pivot", "⬇ Excel",
+                            class_="refresh-btn",
+                            style=("background:#5B6CFF !important; color:white !important; "
+                                   "border:none !important; padding:6px 14px !important; "
+                                   "font-size:0.85em !important; width:auto !important;")
+                        ),
+                        style="display:flex; gap:16px; align-items:center; margin-bottom:8px;"
+                    ),
+                    ui.output_data_frame("operator_category_pivot_table"),
+                    class_="data-table"
+                ),
+                _more_details(
+                    "📶 Data-package detail", "📶 流量套餐明细",
                 # ── Data Package Volume Analysis ─────────────────────────
                 ui.HTML(
                     '<div style="display:flex;align-items:center;gap:12px;'
@@ -2773,30 +2788,38 @@ app_ui = ui.page_sidebar(
                     ui.output_data_frame("data_package_matrix_table"),
                     class_="data-table"
                 ),
-                # ── End of Data Package section ──────────────────────────
-                # ══ Airtime / Top-up Denominations ════════════════════════
-                ui.HTML(
-                    '<div style="display:flex;align-items:center;gap:12px;'
-                    'background:linear-gradient(90deg,rgba(16,185,129,0.10),transparent);'
-                    'border-left:4px solid #10B981;border-radius:0 8px 8px 0;'
-                    'padding:12px 18px;margin:18px 0 14px;">'
-                    '<span style="font-size:1.5em;">📱</span>'
-                    '<div>'
-                    '<div class="lang-en" style="font-weight:700;font-size:1.08em;color:#1E293B;">'
-                    'Airtime / Top-up Denomination Sales</div>'
-                    '<div class="lang-zh" style="font-weight:700;font-size:1.08em;color:#1E293B;">'
-                    '话费充值面值销售分析</div>'
-                    '<div style="font-size:0.8em;color:#64748B;margin-top:2px;">'
-                    'Sales per denomination for airtime/top-up products (充话费 / 后付费 / PIN码话费)</div>'
-                    '</div></div>'
+                ),
+                _more_details(
+                    "🔢 Denomination & product deep-dive", "🔢 面值与产品深度分析",
+                ui.div(
+                    _bh3("📈 Monthly Revenue Trend by Category (Top 6)", "📈 各类别月度收入趋势（前6）"),
+                    _bp("Track how each product line grows or declines over time.",
+                        "跟踪各产品线随时间的增长或下滑。"),
+                    ui.output_ui("category_monthly_trend_chart"),
+                    class_="chart-container"
                 ),
                 ui.div(
-                    _bh3("💵 Airtime Sales by Denomination", "💵 话费各面值销量",
-                         _help("Orders and revenue per denomination for airtime/top-up categories. "
-                               "Labels use the SKU name (e.g. RM 50, 100000 Rp) when available.")),
-                    _bp("Which face values customers actually buy — guides which denominations to stock and promote.",
-                        "客户实际购买的面值分布——指导面值备货与促销重点。"),
-                    ui.output_ui("airtime_denomination_chart"),
+                    _bh3("📈 Top 5 Products — Revenue Trend", "📈 前5产品收入趋势",
+                         _help("Month-over-month revenue for top 5 products. Declining = lifecycle maturity.")),
+                    _bp("Track product revenue trajectories. Declining products may need promotion or indicate substitution.",
+                        "追踪产品收入走势，下降产品可能需要促销支持或表明市场替代。"),
+                    ui.output_ui("product_revenue_trend"),
+                    class_="chart-container"
+                ),
+                ui.div(
+                    _bh3("📊 Top Products by Customer Segment", "📊 按客户分类的产品排名"),
+                    _bp("Revenue per product split by B2B and B2C. Reveals channel-product affinity.",
+                        "各产品按 B2B 和 B2C 分类的收入贡献，揭示渠道-产品亲和性。"),
+                    ui.output_ui("product_segment_chart"),
+                    class_="chart-container"
+                ),
+                ui.div(
+                    _bh3("💵 Recharge Denomination Band Revenue Contribution (%)", "💵 充值面值档位收入贡献率 (%)",
+                         _help("Revenue by denomination band: Low (<10), Mid (10-50), High (>50) in base currency. "
+                               "Airtime & Bill Payment only — denomination is the face value / bill amount.")),
+                    _bp("Which face-value tier (Low/Mid/High) drives the most GMV? Filter to 'Airtime' or 'Bill' category for clean results.",
+                        "哪个面值档位（低/中/高）贡献最多 GMV？筛选到'话费'或'账单'类别可获得更清晰的分析结果。"),
+                    ui.output_ui("denomination_contribution_chart"),
                     class_="chart-container"
                 ),
                 ui.div(
@@ -2859,23 +2882,6 @@ app_ui = ui.page_sidebar(
                     class_="data-table"
                 ),
                 ui.div(
-                    _bh3("🔢 Denomination × Operator Order Matrix", "🔢 面值 × 运营商订单矩阵",
-                         _help("Heatmap of order volume per operator × denomination. Darker = more orders.")),
-                    _bp("Operator-denomination ownership in specific markets — key input for inventory planning.",
-                        "各市场运营商-面值归属分析，是库存规划和合同谈判的关键输入。"),
-                    ui.output_ui("denomination_heatmap"),
-                    class_="chart-container"
-                ),
-                ui.div(
-                    _bh3("💰 Revenue by Denomination × Operator", "💰 各运营商面值收入分布",
-                         _help("Grouped bar: for each of the top 15 denominations, bars are grouped by operator. "
-                               "Shows which operator drives revenue for each denomination.")),
-                    _bp("Identify which operator owns each denomination in terms of GMV — key insight for supplier contract negotiations.",
-                        "识别每个面值的GMV由哪个运营商主导，是供应商合同谈判的关键输入。"),
-                    ui.output_ui("denomination_operator_chart"),
-                    class_="chart-container"
-                ),
-                ui.div(
                     _bh3("🔝 Top Recharge Denominations by Order Volume (All Operators)", "🔝 按订单量排名的充值面值（全运营商）"),
                     _bp("High-volume denominations are key to negotiating volume rebates.",
                         "高销量面值是谈判量返的关键杠杆。"),
@@ -2901,53 +2907,6 @@ app_ui = ui.page_sidebar(
                     ui.output_data_frame("denomination_scorecard"),
                     class_="data-table"
                 ),
-                ui.div(
-                    _bh3("📋 Product Summary", "📋 产品汇总"),
-                    ui.output_data_frame("product_summary_table"),
-                    class_="data-table"
-                ),
-                ui.div(
-                    _bh3("📡 Revenue by Product Category × Operator", "📡 产品类别 × 运营商收入分析",
-                         _help("Revenue (GMV) split by product category (Data/Airtime/Bill) per operator. "
-                               "Identifies which operators are strongest in each product line.")),
-                    _bp("Understand each operator's product mix — which operators dominate Data vs Airtime vs Bill Payment.",
-                        "了解各运营商的产品结构：哪个运营商在数据流量、话费充值、账单支付中各占优势。"),
-                    ui.output_ui("operator_category_revenue_chart"),
-                    class_="chart-container"
-                ),
-                ui.div(
-                    _bh3("📦 Order Volume by Product Category × Operator", "📦 产品类别 × 运营商订单量分析",
-                         _help("Order volume split by product category per operator. "
-                               "Reveals high-frequency operators vs high-value operators per category.")),
-                    _bp("Compare order volume vs revenue per category to identify high-volume/low-value vs low-volume/high-value operators.",
-                        "对比各类别订单量与收入，识别高频低值 vs 低频高值运营商。"),
-                    ui.output_ui("operator_category_volume_chart"),
-                    class_="chart-container"
-                ),
-                ui.div(
-                    _bh3("📋 Operator × Product Category Pivot Table", "📋 运营商 × 产品类别汇总表",
-                         _help("Full pivot: each row = operator, columns = product categories. "
-                               "Shows Revenue (GMV), Orders, and AOV per cell. "
-                               "Toggle between Revenue view and Orders view.")),
-                    _bp("Comprehensive cross-reference of every operator by product type. Download as Excel for detailed analysis.",
-                        "每个运营商按产品类别的完整交叉分析表。可下载为Excel进行详细分析。"),
-                    ui.div(
-                        ui.input_radio_buttons(
-                            "op_cat_metric", None,
-                            choices={"revenue": "💰 Revenue (GMV)", "orders": "📦 Orders", "aov": "💎 AOV"},
-                            selected="revenue", inline=True,
-                        ),
-                        ui.download_button(
-                            "download_op_category_pivot", "⬇ Excel",
-                            class_="refresh-btn",
-                            style=("background:#5B6CFF !important; color:white !important; "
-                                   "border:none !important; padding:6px 14px !important; "
-                                   "font-size:0.85em !important; width:auto !important;")
-                        ),
-                        style="display:flex; gap:16px; align-items:center; margin-bottom:8px;"
-                    ),
-                    ui.output_data_frame("operator_category_pivot_table"),
-                    class_="data-table"
                 ),
                 _remarks_accordion("product_denomination_analysis"),
             ),
@@ -3015,36 +2974,10 @@ app_ui = ui.page_sidebar(
                     class_="chart-container"
                 ),
                 ui.div(
-                    _bh3("📊 Gross Margin % Trend by Operator", "📊 各运营商毛利率趋势",
-                         _help("Margin % trend. Decline = margin compression, signal to renegotiate.")),
-                    _bp("A downward trend signals deteriorating supplier terms requiring renegotiation.",
-                        "下降趋势表明供应商条款恶化，需重新谈判。"),
-                    ui.output_ui("supplier_margin_pct_trend"),
-                    class_="chart-container"
-                ),
-                ui.div(
-                    _bh3("🥧 Revenue Concentration — Pareto Analysis", "🥧 收入集中度 — 帕累托分析",
-                         _help("Bars = GMV per operator. Red line = cumulative share.")),
-                    _bp("If 3 operators drive 80% of GMV, they are your highest-leverage vendor relationships.",
-                        "若前3家供应商贡献80% GMV，则属于高集中风险，同时也是最具谈判杠杆的关系。"),
-                    ui.output_ui("supplier_pareto"),
-                    class_="chart-container"
-                ),
-                ui.div(
                     _bh3("📈 Operator Revenue Trend", "📈 运营商收入趋势"),
                     _bp("Monthly revenue per operator. Identify declining (churn risk) or growing (upsell) operators.",
                         "各运营商月度收入走势，识别流失风险或增值机会。"),
                     ui.output_ui("supplier_trend"),
-                    class_="chart-container"
-                ),
-                ui.div(
-                    _bh3("🚀 Top Operators by Revenue (GMV)", "🚀 按收入排名运营商 (GMV)"),
-                    ui.output_ui("operator_sales_chart"),
-                    class_="chart-container"
-                ),
-                ui.div(
-                    _bh3("📦 Top Operators by Order Volume", "📦 按订单量排名运营商"),
-                    ui.output_ui("operator_orders_chart"),
                     class_="chart-container"
                 ),
                 ui.div(
@@ -3065,16 +2998,6 @@ app_ui = ui.page_sidebar(
                          style="color:#64748B; margin-top:8px;"),
                     ui.output_data_frame("supplier_scorecard"),
                     class_="data-table"
-                ),
-                ui.div(
-                    _bh3("💹 Gross Margin by Product Category", "💹 各产品类别毛利润",
-                         _help("Revenue vs cost (settlement price) breakdown by product category. "
-                               "Requires settlement_price data. "
-                               "Margin % shown above each bar.")),
-                    _bp("Compare margin rates across product categories to identify which categories drive the most profit.",
-                        "比较各产品类别的毛利率，识别利润贡献最高的类别。"),
-                    ui.output_ui("margin_by_category_chart"),
-                    class_="chart-container"
                 ),
                 # ══ Fulfillment & Routing Health ══════════════════════════
                 ui.HTML(
@@ -3101,6 +3024,29 @@ app_ui = ui.page_sidebar(
                     ui.output_ui("fulfillment_kpis"),
                     class_="chart-container"
                 ),
+                _more_details(
+                    "💹 Margin deep-dive", "💹 毛利深度分析",
+                ui.div(
+                    _bh3("📊 Gross Margin % Trend by Operator", "📊 各运营商毛利率趋势",
+                         _help("Margin % trend. Decline = margin compression, signal to renegotiate.")),
+                    _bp("A downward trend signals deteriorating supplier terms requiring renegotiation.",
+                        "下降趋势表明供应商条款恶化，需重新谈判。"),
+                    ui.output_ui("supplier_margin_pct_trend"),
+                    class_="chart-container"
+                ),
+                ui.div(
+                    _bh3("💹 Gross Margin by Product Category", "💹 各产品类别毛利润",
+                         _help("Revenue vs cost (settlement price) breakdown by product category. "
+                               "Requires settlement_price data. "
+                               "Margin % shown above each bar.")),
+                    _bp("Compare margin rates across product categories to identify which categories drive the most profit.",
+                        "比较各产品类别的毛利率，识别利润贡献最高的类别。"),
+                    ui.output_ui("margin_by_category_chart"),
+                    class_="chart-container"
+                ),
+                ),
+                _more_details(
+                    "🔧 Fulfillment diagnostics", "🔧 履约诊断",
                 ui.div(
                     _bh3("⚠ Successful Orders Missing Supplier Order ID", "⚠ 缺少接口商订单号的成功订单",
                          _help("By operator — these orders were charged as successful but have no supplier-side "
@@ -3131,6 +3077,9 @@ app_ui = ui.page_sidebar(
                     ui.output_data_frame("settlement_audit_table"),
                     class_="data-table"
                 ),
+                ),
+                _more_details(
+                    "🇮🇶 Iraq Pinstore — purchase planning", "🇮🇶 伊拉克 Pinstore — 采购计划",
                 ui.tags.hr(style="border-color:rgba(91,108,255,0.25); margin:24px 0 16px;"),
                 ui.HTML(
                     '<div style="display:flex;align-items:center;gap:12px;'
@@ -3212,6 +3161,7 @@ app_ui = ui.page_sidebar(
                     ui.output_data_frame("pinstore_purchase_matrix"),
                     class_="data-table"
                 ),
+                ),
                 _remarks_accordion("supplier_operator_performance"),
             ),
             ),
@@ -3256,15 +3206,6 @@ app_ui = ui.page_sidebar(
                     ui.output_ui("b2b_agent_revenue_chart"),
                     class_="chart-container"
                 ),
-                ui.div(
-                    _bh3("📋 B2B Agent Performance Table (Top 50)", "📋 B2B 代理商绩效表（前50）",
-                         _help("Detailed B2B table: orders, revenue, AOV, revenue share, cumulative share. "
-                               "Cumulative share shows how many agents drive the majority of B2B GMV.")),
-                    _bp("Sorted by revenue. Cumulative share identifies concentration risk in your agent network.",
-                        "按收入排序，累计占比识别代理商网络中的集中度风险。"),
-                    ui.output_data_frame("agent_performance_table"),
-                    class_="data-table"
-                ),
                 # ══ B2C Customer Analytics section header ════════════════
                 ui.HTML(
                     '<div style="display:flex;align-items:center;gap:12px;'
@@ -3305,27 +3246,6 @@ app_ui = ui.page_sidebar(
                     class_="chart-container"
                 ),
                 ui.div(
-                    _bh3("⏱️ Registration → First Purchase Funnel (B2C)", "⏱️ 注册到首购漏斗（B2C）",
-                         _help("Shows how quickly registered B2C customers make their first purchase. "
-                               "Same Day = first order on the day of registration. "
-                               "Within 7 Days, 8–30 Days, 31–90 Days = conversion windows. "
-                               "No Purchase = registered users with no order on record.")),
-                    _bp("Measure how fast new registrations convert. A long tail means acquisition → purchase friction needs attention.",
-                        "衡量新注册用户首购转化速度。长尾说明注册到购买存在摩擦，需要优化引导流程。"),
-                    ui.output_ui("b2c_registration_funnel"),
-                    class_="chart-container"
-                ),
-                ui.div(
-                    _bh3("🌐 IP Geographic Origin Analysis (B2C)", "🌐 IP来源地分析（B2C）",
-                         _help("Compares the country of the order (from order data) vs. the country inferred from the customer's IP address. "
-                               "Mismatches may indicate VPN use, cross-border shopping, or fraud signals. "
-                               "Requires ip_country column in the data.")),
-                    _bp("Identify geographic mismatches between order origin and IP location. High mismatch rates may signal VPN or fraud activity.",
-                        "识别订单来源国家与IP归属地的差异。高错配率可能表明VPN使用或潜在欺诈活动。"),
-                    ui.output_ui("b2c_ip_analysis"),
-                    class_="chart-container"
-                ),
-                ui.div(
                     _bh3("🔄 New vs. Returning Customers (B2C)", "🔄 新客 vs 老客（B2C）",
                          _help("New customers = first-ever order in the selected period. "
                                "Returning customers = had at least one prior order. "
@@ -3333,24 +3253,6 @@ app_ui = ui.page_sidebar(
                     _bp("Customer loyalty indicator: a higher returning-customer share signals strong retention.",
                         "客户忠诚度指标：回购客户占比越高，说明留存能力越强。"),
                     ui.output_ui("new_vs_returning_chart"),
-                    class_="chart-container"
-                ),
-                ui.div(
-                    _bh3("📈 Monthly Customer Acquisition Rate (B2C)", "📈 每月新客户获取量（B2C）",
-                         _help("Number of B2C customers placing their first-ever order in each month. "
-                               "A consistent upward trend indicates healthy top-of-funnel growth.")),
-                    _bp("Track how many new B2C customers are acquired each month. A flattening trend signals acquisition funnel issues.",
-                        "跟踪每月B2C新客户获取量。趋势趋平或下滑意味着获客漏斗出现问题。"),
-                    ui.output_ui("new_customer_acquisition_chart"),
-                    class_="chart-container"
-                ),
-                ui.div(
-                    _bh3("📊 User Source Analysis (B2C)", "📊 渠道来源分析（B2C）",
-                         _help("Breakdown of B2C customers by their acquisition source (用户来源). "
-                               "Identify which channels bring the most customers and highest-value buyers.")),
-                    _bp("Understand which acquisition channels (user source) drive volume vs. value for B2C customers.",
-                        "了解哪些获客渠道（用户来源）为B2C客户带来量和价值的差异。"),
-                    ui.output_ui("user_source_chart"),
                     class_="chart-container"
                 ),
                 ui.div(
@@ -3389,6 +3291,47 @@ app_ui = ui.page_sidebar(
                     ui.output_ui("cohort_ltv_curves"),
                     class_="chart-container"
                 ),
+                _more_details(
+                    "📚 More customer detail", "📚 更多客户明细",
+                ui.div(
+                    _bh3("📋 B2B Agent Performance Table (Top 50)", "📋 B2B 代理商绩效表（前50）",
+                         _help("Detailed B2B table: orders, revenue, AOV, revenue share, cumulative share. "
+                               "Cumulative share shows how many agents drive the majority of B2B GMV.")),
+                    _bp("Sorted by revenue. Cumulative share identifies concentration risk in your agent network.",
+                        "按收入排序，累计占比识别代理商网络中的集中度风险。"),
+                    ui.output_data_frame("agent_performance_table"),
+                    class_="data-table"
+                ),
+                ui.div(
+                    _bh3("⏱️ Registration → First Purchase Funnel (B2C)", "⏱️ 注册到首购漏斗（B2C）",
+                         _help("Shows how quickly registered B2C customers make their first purchase. "
+                               "Same Day = first order on the day of registration. "
+                               "Within 7 Days, 8–30 Days, 31–90 Days = conversion windows. "
+                               "No Purchase = registered users with no order on record.")),
+                    _bp("Measure how fast new registrations convert. A long tail means acquisition → purchase friction needs attention.",
+                        "衡量新注册用户首购转化速度。长尾说明注册到购买存在摩擦，需要优化引导流程。"),
+                    ui.output_ui("b2c_registration_funnel"),
+                    class_="chart-container"
+                ),
+                ui.div(
+                    _bh3("🌐 IP Geographic Origin Analysis (B2C)", "🌐 IP来源地分析（B2C）",
+                         _help("Compares the country of the order (from order data) vs. the country inferred from the customer's IP address. "
+                               "Mismatches may indicate VPN use, cross-border shopping, or fraud signals. "
+                               "Requires ip_country column in the data.")),
+                    _bp("Identify geographic mismatches between order origin and IP location. High mismatch rates may signal VPN or fraud activity.",
+                        "识别订单来源国家与IP归属地的差异。高错配率可能表明VPN使用或潜在欺诈活动。"),
+                    ui.output_ui("b2c_ip_analysis"),
+                    class_="chart-container"
+                ),
+                ui.div(
+                    _bh3("📈 Monthly Customer Acquisition Rate (B2C)", "📈 每月新客户获取量（B2C）",
+                         _help("Number of B2C customers placing their first-ever order in each month. "
+                               "A consistent upward trend indicates healthy top-of-funnel growth.")),
+                    _bp("Track how many new B2C customers are acquired each month. A flattening trend signals acquisition funnel issues.",
+                        "跟踪每月B2C新客户获取量。趋势趋平或下滑意味着获客漏斗出现问题。"),
+                    ui.output_ui("new_customer_acquisition_chart"),
+                    class_="chart-container"
+                ),
                 ui.div(
                     _bh3("📊 Order Frequency Distribution (B2C)", "📊 下单频次分布（B2C）",
                          _help("Distribution of how many orders each B2C customer has placed. "
@@ -3409,6 +3352,7 @@ app_ui = ui.page_sidebar(
                     _bh3("📋 Customer Summary (B2C)", "📋 客户汇总（B2C）"),
                     ui.output_data_frame("user_summary_table"),
                     class_="data-table"
+                ),
                 ),
                 _remarks_accordion("customer_analytics"),
             ),
@@ -3458,6 +3402,8 @@ app_ui = ui.page_sidebar(
                     ui.output_ui("coupon_vs_noncoupon_chart"),
                     class_="chart-container"
                 ),
+                _more_details(
+                    "🎯 More promotion detail", "🎯 更多营销明细",
                 ui.div(
                     _bh3("🆕 New-User Promo Orders by Month", "🆕 新人优惠订单月度趋势",
                          _help("Orders flagged 是否新人优惠 = 是. Tracks acquisition-promo volume over time.")),
@@ -3474,6 +3420,7 @@ app_ui = ui.page_sidebar(
                         "运营位效果——给产品加角标真的能带动销售吗？"),
                     ui.output_ui("badge_product_chart"),
                     class_="chart-container"
+                ),
                 ),
                 _remarks_accordion("marketing_promotions"),
             ),
@@ -6102,87 +6049,6 @@ def server(input, output, session):
     # ------------------------------------------------------------------
     @render.ui
     @safe_render
-    def country_growth_table():
-        df = mi_filtered_data()
-        _compare = list(input.mi_compare_countries() or [])
-        prev = previous_period_data()
-        if _compare:
-            prev = prev[prev['country'].astype(str).isin(_compare)]
-        if 'country' not in df.columns or 'sales' not in df.columns:
-            return _no_data()
-        currency = currency_converter()
-        cur = df.groupby('country', observed=True)['sales'].sum().mul(currency['rate'])
-        prv = prev.groupby('country', observed=True)['sales'].sum().mul(currency['rate'])
-        # Convert CategoricalIndex to plain string before concat to avoid int16 buffer dtype mismatch
-        cur.index = cur.index.astype(str)
-        prv.index = prv.index.astype(str)
-        # Combine into a single frame
-        gdf = pd.concat([cur.rename('current'), prv.rename('previous')], axis=1).fillna(0).reset_index()
-        gdf['country'] = gdf['country'].astype(str)
-        gdf = gdf[(gdf['current'] > 0) | (gdf['previous'] > 0)]
-        # Coerce to plain float to avoid object-dtype contamination from category levels
-        gdf['current']  = pd.to_numeric(gdf['current'],  errors='coerce')
-        gdf['previous'] = pd.to_numeric(gdf['previous'], errors='coerce')
-        # Only consider countries with meaningful prior volume to avoid 0 -> any = ∞
-        prev_q25 = float(gdf['previous'].quantile(0.25)) if len(gdf) else 0.0
-        meaningful = gdf['previous'] >= max(100.0, prev_q25)
-        # Use np.nan (not pd.NA) so the column stays float64 and supports nlargest/nsmallest
-        prev_safe = gdf['previous'].replace(0, np.nan)
-        gdf['growth_pct'] = ((gdf['current'] - gdf['previous']) / prev_safe) * 100.0
-        gdf['growth_pct'] = pd.to_numeric(gdf['growth_pct'], errors='coerce')
-        gdf_meaningful = gdf[meaningful].dropna(subset=['growth_pct'])
-        risers = gdf_meaningful.nlargest(10, 'growth_pct')
-        decliners = gdf_meaningful.nsmallest(10, 'growth_pct')
-        # New markets (prev = 0, current > threshold)
-        new_markets = gdf[(gdf['previous'] == 0) & (gdf['current'] > 100)].nlargest(5, 'current')
-
-        def _pill(value, color):
-            return ui.tags.span(
-                value,
-                style=f"display:inline-block; padding:3px 10px; border-radius:999px;"
-                      f"background:{color}15; color:{color}; font-weight:600; font-size:0.85em;"
-            )
-
-        def _row_table(title, frame, color, icon, value_label):
-            if frame.empty:
-                return ui.div(
-                    ui.tags.h5(f"{icon} {title}"),
-                    ui.p("No qualifying countries in this period.", style="color:#64748B; font-size:0.85em;"),
-                    style="flex: 1 1 33%; min-width: 280px;"
-                )
-            rows = []
-            for _, r in frame.iterrows():
-                v = T.format_pct(r.get('growth_pct')) if 'growth_pct' in frame.columns else T.format_number(r['current'], currency['symbol'])
-                rows.append(ui.tags.tr(
-                    ui.tags.td(r['country'], style="padding:7px 10px; font-weight:500; color:#0F172A;"),
-                    ui.tags.td(T.format_number(r['current'], currency['symbol']),
-                               style="padding:7px 10px; color:#475569; text-align:right; font-variant-numeric: tabular-nums;"),
-                    ui.tags.td(_pill(v, color),
-                               style="padding:7px 10px; text-align:right;"),
-                ))
-            return ui.div(
-                ui.tags.h5(f"{icon} {title}", style="color:#0F172A; margin-bottom:8px;"),
-                ui.tags.table(
-                    ui.tags.thead(ui.tags.tr(
-                        ui.tags.th("Country", style="text-align:left; padding:8px 10px; font-size:0.78em; color:#64748B; text-transform:uppercase; letter-spacing:0.5px;"),
-                        ui.tags.th("Current", style="text-align:right; padding:8px 10px; font-size:0.78em; color:#64748B; text-transform:uppercase; letter-spacing:0.5px;"),
-                        ui.tags.th(value_label, style="text-align:right; padding:8px 10px; font-size:0.78em; color:#64748B; text-transform:uppercase; letter-spacing:0.5px;"),
-                    )),
-                    ui.tags.tbody(*rows),
-                    style="width:100%; border-collapse:collapse; background:#FAFAFA; border-radius:8px; overflow:hidden;"
-                ),
-                style="flex: 1 1 33%; min-width: 280px;"
-            )
-
-        return ui.div(
-            _row_table("Top 10 risers", risers, T.SUCCESS, "🚀", "Growth"),
-            _row_table("Top 10 decliners", decliners, T.DANGER, "📉", "Change"),
-            _row_table("New markets", new_markets, T.INFO, "✨", "Sales"),
-            style="display:flex; gap:16px; flex-wrap:wrap;"
-        )
-
-    @render.ui
-    @safe_render
     def country_potential_scatter():
         df = mi_filtered_data()
         if not {'country', 'sales', 'order_id'}.issubset(df.columns):
@@ -6231,186 +6097,6 @@ def server(input, output, session):
                       xaxis_type="log", yaxis_type="log",
                       margin=dict(l=10, r=10, t=50, b=10), height=540)
         return ui.HTML(T.fig_to_html(fig))
-
-    # ------------------------------------------------------------------
-    # Phase 1.2 — Country Expansion Radar
-    # Classifies each country into a 2x2 quadrant based on Orders × AOV
-    # versus the median across all visible countries. Each quadrant has an
-    # explicit business label and a top-5 list.
-    # ------------------------------------------------------------------
-    @reactive.Calc
-    def expansion_radar_data():
-        df = mi_filtered_data()
-        if not {'country', 'sales', 'order_id'}.issubset(df.columns):
-            return None
-        currency = currency_converter()
-        grp = df.groupby('country', observed=True)
-        agg = pd.DataFrame({'sales': grp['sales'].sum(),
-                            'orders': grp['order_id'].nunique()}).reset_index()
-        agg = agg[(agg['sales'] > 0) & (agg['orders'] > 0)]
-        if agg.empty:
-            return None
-        agg['sales'] = agg['sales'] * currency['rate']
-        agg['aov'] = agg['sales'] / agg['orders']
-        # Focus on countries that matter — top 60 by sales
-        agg = agg.nlargest(60, 'sales').reset_index(drop=True)
-        median_orders = float(agg['orders'].median())
-        median_aov    = float(agg['aov'].median())
-
-        def _quadrant(row):
-            high_orders = row['orders'] >= median_orders
-            high_aov    = row['aov']    >= median_aov
-            if high_orders and high_aov:
-                return "Stronghold"
-            if high_orders and not high_aov:
-                return "Upsell target"
-            if (not high_orders) and high_aov:
-                return "Expansion target"
-            return "Long tail"
-
-        agg['quadrant'] = agg.apply(_quadrant, axis=1)
-        return {
-            'frame': agg,
-            'median_orders': median_orders,
-            'median_aov': median_aov,
-            'currency': currency,
-        }
-
-    QUAD_COLORS = {
-        "Stronghold":       "#10B981",   # green
-        "Upsell target":    "#F59E0B",   # amber
-        "Expansion target": "#5B6CFF",   # primary blue
-        "Long tail":        "#94A3B8",   # slate
-    }
-
-    @render.ui
-    @safe_render
-    def country_expansion_radar():
-        data = expansion_radar_data()
-        if data is None:
-            return ui.HTML('<div style="color:#64748B;padding:20px;">No country data in current selection.</div>')
-        agg = data['frame']
-        currency = data['currency']
-        sym = currency['symbol']
-        median_orders = data['median_orders']
-        median_aov    = data['median_aov']
-
-        fig = go.Figure()
-        for quad, color in QUAD_COLORS.items():
-            d = agg[agg['quadrant'] == quad]
-            if d.empty:
-                continue
-            fig.add_trace(go.Scatter(
-                x=d['orders'], y=d['aov'],
-                mode='markers+text',
-                name=quad,
-                marker=dict(
-                    size=(d['sales'] / agg['sales'].max() * 55 + 10),
-                    color=color,
-                    line=dict(color='white', width=1.5),
-                    opacity=0.88,
-                ),
-                text=d['country'],
-                textposition='top center',
-                textfont=dict(size=9, color="#334155"),
-                customdata=d['sales'],
-                hovertemplate=('<b>%{text}</b><br>'
-                              'Quadrant: ' + quad + '<br>'
-                              'Orders: %{x:,}<br>'
-                              'AOV: ' + sym + '%{y:,.2f}<br>'
-                              'Total sales: ' + sym + '%{customdata:,.0f}<extra></extra>'),
-            ))
-        # Quadrant guide lines
-        fig.add_hline(y=median_aov, line_dash="dot", line_color="#94A3B8", opacity=0.6,
-                      annotation_text=f"Median AOV {sym}{median_aov:,.0f}",
-                      annotation_position="top right",
-                      annotation_font=dict(size=10, color="#64748B"))
-        fig.add_vline(x=median_orders, line_dash="dot", line_color="#94A3B8", opacity=0.6,
-                      annotation_text=f"Median orders {median_orders:,.0f}",
-                      annotation_position="top right",
-                      annotation_font=dict(size=10, color="#64748B"))
-        # Quadrant labels (top-right of each quadrant region)
-        for quad, color in QUAD_COLORS.items():
-            d = agg[agg['quadrant'] == quad]
-            if d.empty: continue
-            quad_label = {
-                "Stronghold":       "STRONGHOLDS · defend share",
-                "Upsell target":    "UPSELL TARGETS · push higher denoms",
-                "Expansion target": "EXPANSION TARGETS · invest in marketing",
-                "Long tail":        "LONG TAIL · deprioritise",
-            }[quad]
-            fig.add_annotation(
-                xref="x", yref="y",
-                x=(agg['orders'].max() if "Upsell" in quad or "Stronghold" in quad else median_orders * 0.5),
-                y=(agg['aov'].max() if "Stronghold" in quad or "Expansion" in quad else median_aov * 0.5),
-                text=f"<i>{quad_label}</i>",
-                showarrow=False,
-                font=dict(size=10, color=color),
-                opacity=0.55,
-                xanchor='right' if "Upsell" in quad or "Stronghold" in quad else 'left',
-                yanchor='top' if "Stronghold" in quad or "Expansion" in quad else 'bottom',
-            )
-        T.apply_theme(fig, title=_tt("Country expansion radar · classified by Orders × AOV"),
-                      xaxis_title=_tt("Orders"), yaxis_title=_tt(f"Avg order value ({sym})"),
-                      xaxis_type="log", yaxis_type="log",
-                      margin=dict(l=10, r=10, t=50, b=10), height=560,
-                      legend=dict(orientation="h", yanchor="bottom", y=-0.18, xanchor="left", x=0))
-        return ui.HTML(T.fig_to_html(fig))
-
-    @render.ui
-    @safe_render
-    def country_expansion_quadrant_tables():
-        data = expansion_radar_data()
-        if data is None:
-            return _no_data()
-        agg = data['frame']
-        sym = data['currency']['symbol']
-        QUAD_DESC = [
-            ("Stronghold",       "🏰", "Strongholds — defend share, deepen relationships"),
-            ("Upsell target",    "📈", "Upsell targets — high volume but low AOV; push higher denominations"),
-            ("Expansion target", "🚀", "Expansion targets — high AOV but low volume; invest in marketing"),
-            ("Long tail",        "🪶", "Long tail — deprioritise unless growing fast"),
-        ]
-        sections = []
-        for quad, icon, desc in QUAD_DESC:
-            d = agg[agg['quadrant'] == quad].nlargest(5, 'sales')
-            color = QUAD_COLORS[quad]
-            if d.empty:
-                rows = [ui.tags.tr(ui.tags.td("—", colspan=4,
-                                              style="padding:10px; color:#94A3B8; text-align:center;"))]
-            else:
-                rows = []
-                for _, r in d.iterrows():
-                    rows.append(ui.tags.tr(
-                        ui.tags.td(r['country'],
-                                   style="padding:7px 10px; font-weight:500;"),
-                        ui.tags.td(T.format_int(r['orders']),
-                                   style="padding:7px 10px; text-align:right; font-variant-numeric:tabular-nums;"),
-                        ui.tags.td(T.format_number(r['aov'], sym),
-                                   style="padding:7px 10px; text-align:right; font-variant-numeric:tabular-nums;"),
-                        ui.tags.td(T.format_number(r['sales'], sym),
-                                   style="padding:7px 10px; text-align:right; font-variant-numeric:tabular-nums; color:#475569;"),
-                    ))
-            sections.append(ui.div(
-                ui.tags.h5(
-                    ui.tags.span(icon, style="margin-right:6px;"),
-                    quad,
-                    style=f"color:{color}; border-bottom:2px solid {color}; padding-bottom:6px; margin:0 0 8px 0;"
-                ),
-                ui.tags.p(desc, style="font-size:0.78em; color:#64748B; margin:0 0 10px 0;"),
-                ui.tags.table(
-                    ui.tags.thead(ui.tags.tr(
-                        ui.tags.th("Country",  style="text-align:left; padding:6px 10px; font-size:0.74em; color:#64748B; text-transform:uppercase;"),
-                        ui.tags.th("Orders",   style="text-align:right; padding:6px 10px; font-size:0.74em; color:#64748B; text-transform:uppercase;"),
-                        ui.tags.th("AOV",      style="text-align:right; padding:6px 10px; font-size:0.74em; color:#64748B; text-transform:uppercase;"),
-                        ui.tags.th("Sales",    style="text-align:right; padding:6px 10px; font-size:0.74em; color:#64748B; text-transform:uppercase;"),
-                    )),
-                    ui.tags.tbody(*rows),
-                    style="width:100%; border-collapse:collapse; background:#FAFAFA; border-radius:8px; overflow:hidden;"
-                ),
-                style="flex: 1 1 45%; min-width: 320px; margin-bottom: 16px;"
-            ))
-        return ui.div(*sections, style="display:flex; gap:16px; flex-wrap:wrap;")
 
     # ------------------------------------------------------------------
     # Phase 2 — Compare tab
@@ -6757,45 +6443,6 @@ def server(input, output, session):
                       xaxis_title=None, yaxis_title=_tt("Orders"), barmode='stack')
         return ui.HTML(T.fig_to_html(fig))
 
-    @render.ui
-    @safe_render
-    def country_orders_chart():
-        df = mi_filtered_data()
-        if 'country' not in df.columns or 'order_id' not in df.columns:
-            return _no_data()
-        co = df.groupby('country', observed=True)['order_id'].nunique().nlargest(15).reset_index()
-        co = co.sort_values('order_id')
-        fig = charts.topn_hbar(
-            values=co['order_id'], labels=co['country'],
-            title=_tt("Top 15 countries by orders"), xaxis_title=_tt("Orders"),
-            hover_label='Orders: %{x:,}',
-            value_text=[T.format_int(v) for v in co['order_id']])
-        return ui.HTML(T.fig_to_html(fig))
-
-    # ── New: Market Intelligence additions ───────────────────────────────────
-
-    @render.ui
-    @safe_render
-    def country_aov_chart():
-        df = mi_filtered_data()
-        if 'country' not in df.columns or 'sales' not in df.columns or 'order_id' not in df.columns:
-            return _no_data()
-        currency = currency_converter()
-        rate, sym = currency['rate'], currency['symbol']
-        grp = df.groupby('country', observed=True)
-        agg = pd.DataFrame({'sales': grp['sales'].sum(),
-                            'orders': grp['order_id'].nunique()}).reset_index()
-        agg['aov'] = (agg['sales'] * rate) / agg['orders'].replace(0, np.nan)
-        agg = agg.dropna(subset=['aov']).nlargest(15, 'aov').sort_values('aov', ascending=True)
-        if agg.empty:
-            return _no_data()
-        fig = charts.topn_hbar(
-            values=agg['aov'], labels=agg['country'], color_line=True,
-            title=_tt(f"Average Order Value (AOV) by Market · Top 15 · {currency['label']}"),
-            xaxis_title=_tt(f"AOV ({sym})"),
-            hover_label='AOV: ' + sym + '%{x:,.2f}',
-            value_text=[T.format_number(v, sym) for v in agg['aov']])
-        return ui.HTML(T.fig_to_html(fig))
 
     # ── New: Operational Intelligence additions ───────────────────────────────
 
@@ -7367,49 +7014,6 @@ def server(input, output, session):
                       legend=dict(orientation="h", yanchor="bottom", y=-0.22, xanchor="left", x=0))
         return ui.HTML(T.fig_to_html(fig))
 
-    @render.ui
-    @safe_render
-    def operator_sales_chart():
-        df = filtered_data()
-        operator_col = 'operator' if 'operator' in df.columns else 'country'
-        if operator_col not in df.columns or 'sales' not in df.columns:
-            return _no_data()
-        currency = currency_converter()
-        os_ = df.groupby(operator_col, observed=True)['sales'].sum().mul(currency['rate']).nlargest(10).reset_index()
-        os_ = os_.sort_values('sales')
-        fig = go.Figure(go.Bar(
-            x=os_['sales'], y=os_[operator_col], orientation='h',
-            marker=dict(color=os_['sales'], colorscale=T.SCALE_SEQUENTIAL, showscale=False),
-            text=[T.format_number(v, currency['symbol']) for v in os_['sales']],
-            textposition='outside', textfont=dict(size=11, color="#334155"),
-            hovertemplate='<b>%{y}</b><br>Sales: ' + currency['symbol'] + '%{x:,.0f}<extra></extra>',
-        ))
-        T.apply_theme(fig, title=_tt(f"Top 10 operators by sales · {currency['label']}"),
-                      xaxis_title=_tt(f"Sales ({currency['symbol']})"), yaxis_title=None,
-                      margin=dict(l=10, r=80, t=50, b=10))
-        return ui.HTML(T.fig_to_html(fig))
-
-    @render.ui
-    @safe_render
-    def operator_orders_chart():
-        df = filtered_data()
-        operator_col = 'operator' if 'operator' in df.columns else 'country'
-        if operator_col not in df.columns or 'order_id' not in df.columns:
-            return _no_data()
-        oo = df.groupby(operator_col, observed=True)['order_id'].nunique().nlargest(10).reset_index()
-        oo = oo.sort_values('order_id')
-        fig = go.Figure(go.Bar(
-            x=oo['order_id'], y=oo[operator_col], orientation='h',
-            marker=dict(color=oo['order_id'], colorscale=T.SCALE_SEQUENTIAL, showscale=False),
-            text=[T.format_int(v) for v in oo['order_id']],
-            textposition='outside', textfont=dict(size=11, color="#334155"),
-            hovertemplate='<b>%{y}</b><br>Orders: %{x:,}<extra></extra>',
-        ))
-        T.apply_theme(fig, title=_tt("Top 10 operators by orders"),
-                      xaxis_title=_tt("Orders"), yaxis_title=None,
-                      margin=dict(l=10, r=80, t=50, b=10))
-        return ui.HTML(T.fig_to_html(fig))
-
     # ------------------------------------------------------------------
     # Supplier Insights (operator-level negotiation data)
     # ------------------------------------------------------------------
@@ -7497,44 +7101,6 @@ def server(input, output, session):
                       xaxis_title=_tt(f"Sales ({currency['symbol']})"), yaxis_title=None,
                       margin=dict(l=10, r=80, t=50, b=10), height=520,
                       legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="left", x=0))
-        return ui.HTML(T.fig_to_html(fig))
-
-    @render.ui
-    @safe_render
-    def supplier_pareto():
-        df = filtered_data()
-        if 'operator' not in df.columns or 'sales' not in df.columns:
-            return _no_data()
-        currency = currency_converter()
-        op = df.groupby('operator', observed=True)['sales'].sum().mul(currency['rate'])
-        op = op[op > 0].sort_values(ascending=False).head(20).reset_index()
-        op.columns = ['operator', 'sales']
-        op['cum_share'] = (op['sales'].cumsum() / op['sales'].sum()) * 100
-
-        fig = go.Figure()
-        fig.add_trace(go.Bar(
-            x=op['operator'], y=op['sales'],
-            name=_tt('Sales'),
-            marker=dict(color=op['sales'], colorscale=T.SCALE_SEQUENTIAL, showscale=False,
-                        line=dict(color='white', width=1)),
-            hovertemplate='<b>%{x}</b><br>Sales: ' + currency['symbol'] + '%{y:,.0f}<extra></extra>',
-        ))
-        fig.add_trace(go.Scatter(
-            x=op['operator'], y=op['cum_share'],
-            name=_tt('Cumulative %'), mode='lines+markers', yaxis='y2',
-            line=dict(color=T.DANGER, width=2.5, shape='spline'),
-            marker=dict(size=6, color=T.DANGER, line=dict(color='white', width=1.5)),
-            hovertemplate='<b>%{x}</b><br>Cumulative: %{y:.1f}%<extra></extra>',
-        ))
-        fig.add_hline(y=80, line_dash="dot", line_color="#94A3B8", yref="y2",
-                      annotation_text="80%", annotation_position="bottom right",
-                      annotation_font=dict(size=10, color="#64748B"))
-        T.apply_theme(fig, title=_tt(f"Pareto · top 20 operators · {currency['label']}"),
-                      xaxis_title=None, yaxis_title=_tt(f"Sales ({currency['symbol']})"),
-                      yaxis2=dict(title=_tt("Cumulative %"), overlaying='y', side='right',
-                                  range=[0, 105], showgrid=False, ticksuffix="%"),
-                      legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="left", x=0),
-                      margin=dict(l=10, r=60, t=60, b=10))
         return ui.HTML(T.fig_to_html(fig))
 
     @render.ui
@@ -8865,97 +8431,6 @@ def server(input, output, session):
 
     @render.ui
     @safe_render
-    def denomination_heatmap():
-        d = _denom_frame()
-        if d is None or 'operator' not in d.columns or 'order_id' not in d.columns:
-            return ui.HTML('<div style="color:#64748B;padding:20px;">No denomination data in current selection.</div>')
-
-        agg = (d.groupby(['operator', 'denomination'], observed=True)['order_id']
-                .nunique().reset_index(name=_tt('orders')))
-        agg = agg[agg['orders'] > 0]
-        if agg.empty:
-            return ui.HTML('<div style="color:#64748B;padding:20px;">No denomination data in current selection.</div>')
-
-        # Limit to top 15 operators × top 25 denominations by total volume
-        top_ops    = agg.groupby('operator', observed=True)['orders'].sum().nlargest(15).index.tolist()
-        top_denoms = agg.groupby('denomination', observed=True)['orders'].sum().nlargest(25).index.tolist()
-        agg = agg[agg['operator'].isin(top_ops) & agg['denomination'].isin(top_denoms)]
-
-        denom_order = sorted(top_denoms, key=_denom_sort_key)
-        op_order    = (agg.groupby('operator', observed=True)['orders'].sum()
-                          .sort_values(ascending=True).index.tolist())  # heaviest at top
-
-        pivot = agg.pivot(index='operator', columns='denomination', values='orders')
-        pivot = pivot.reindex(index=op_order, columns=denom_order).fillna(0)
-
-        fig = go.Figure(go.Heatmap(
-            z=pivot.values, x=pivot.columns, y=pivot.index,
-            colorscale=T.SCALE_SEQUENTIAL, showscale=True,
-            zmin=0,
-            colorbar=dict(title=dict(text="Orders", font=dict(size=11)),
-                          thickness=12, len=0.75),
-            hovertemplate='<b>Operator:</b> %{y}<br><b>Denomination:</b> %{x}<br><b>Orders:</b> %{z:,}<extra></extra>',
-        ))
-        # Cell labels only when the data set is small enough to keep them legible
-        if pivot.size <= 200:
-            fig.update_traces(text=pivot.values.astype(int),
-                              texttemplate='%{text:,}',
-                              textfont=dict(size=10, color="#0F172A"))
-        height = max(360, 28 * max(1, len(op_order)) + 100)
-        T.apply_theme(fig, title=_tt("Orders by Operator × Denomination"),
-                      xaxis_title=_tt("Denomination"), yaxis_title=None,
-                      margin=dict(l=10, r=10, t=50, b=60), height=height,
-                      xaxis=dict(tickangle=-30, automargin=True))
-        return ui.HTML(T.fig_to_html(fig))
-
-    @render.ui
-    @safe_render
-    def denomination_operator_chart():
-        d = _denom_frame()
-        if d is None or 'operator' not in d.columns:
-            return ui.HTML('<div style="color:#64748B;padding:20px;">No denomination × operator data available.</div>')
-        currency = currency_converter()
-        rate, sym = currency['rate'], currency['symbol']
-        grp = d.groupby(['denomination', 'operator'], observed=True)
-        orders_s  = grp['order_id'].nunique() if 'order_id' in d.columns else grp.size()
-        revenue_s = grp['sales'].sum()        if 'sales'    in d.columns else pd.Series(0.0, index=orders_s.index)
-        agg = pd.DataFrame({'orders': orders_s, 'revenue': revenue_s}).reset_index()
-        agg['revenue'] = agg['revenue'] * rate
-        if agg.empty:
-            return ui.HTML('<div style="color:#64748B;padding:20px;">No data.</div>')
-        top_denoms = (agg.groupby('denomination', observed=True)['orders']
-                         .sum().nlargest(15).index.tolist())
-        top_denoms_sorted = sorted(top_denoms, key=_denom_sort_key)
-        top_ops = (agg.groupby('operator', observed=True)['orders']
-                      .sum().nlargest(10).index.tolist())
-        agg = agg[agg['denomination'].isin(top_denoms) & agg['operator'].isin(top_ops)].copy()
-        agg['denomination'] = agg['denomination'].astype(str)
-        denom_str_order = [str(x) for x in top_denoms_sorted]
-        agg['denomination'] = pd.Categorical(agg['denomination'], categories=denom_str_order, ordered=True)
-        fig = go.Figure()
-        colors = (T.PALETTE * (len(top_ops) // len(T.PALETTE) + 1))
-        for i, op in enumerate(top_ops):
-            sub = agg[agg['operator'].astype(str) == str(op)].sort_values('denomination')
-            if sub.empty:
-                continue
-            fig.add_trace(go.Bar(
-                x=sub['denomination'].astype(str), y=sub['revenue'],
-                name=str(op),
-                marker=dict(color=colors[i], line=dict(color='white', width=0.8)),
-                hovertemplate='<b>%{x}</b><br>' + str(op) + ': ' + sym + '%{y:,.0f}<extra></extra>',
-            ))
-        fig.update_layout(barmode='group')
-        T.apply_theme(fig,
-                      title=_tt(f"Revenue by Denomination × Operator (Top 15 denominations) · {currency['label']}"),
-                      xaxis_title=_tt("Denomination"), yaxis_title=_tt(f"Revenue ({sym})"),
-                      height=460,
-                      legend=dict(orientation="h", yanchor="bottom", y=-0.32, xanchor="left", x=0),
-                      margin=dict(l=10, r=10, t=50, b=130))
-        fig.update_xaxes(tickangle=-35)
-        return ui.HTML(T.fig_to_html(fig))
-
-    @render.ui
-    @safe_render
     def top_denominations_chart():
         d = _denom_frame()
         if d is None or 'order_id' not in d.columns:
@@ -9108,78 +8583,6 @@ def server(input, output, session):
         agg['operator'] = agg['operator'].astype(str)
         agg['product_category'] = agg['product_category'].astype(str)
         return agg, currency
-
-    @render.ui
-    @safe_render
-    def operator_category_revenue_chart():
-        result = _operator_category_data()
-        if result is None:
-            return ui.HTML('<div style="color:#64748B;padding:20px;">Operator or product category data not available.</div>')
-        agg, currency = result
-        sym = currency['symbol']
-        # Top 15 operators by total revenue
-        top_ops = agg.groupby('operator', observed=True)['revenue'].sum().nlargest(15).index.tolist()
-        d = agg[agg['operator'].isin(top_ops)].copy()
-        # Sort operators by total revenue descending
-        op_order = d.groupby('operator', observed=True)['revenue'].sum().sort_values(ascending=True).index.tolist()
-        d['operator'] = pd.Categorical(d['operator'], categories=op_order, ordered=True)
-        cats = sorted(d['product_category'].unique().tolist())
-
-        from plotly.subplots import make_subplots
-        fig = go.Figure()
-        for i, cat in enumerate(cats):
-            sub = d[d['product_category'] == cat].sort_values('operator')
-            fig.add_trace(go.Bar(
-                y=sub['operator'].astype(str), x=sub['revenue'],
-                name=cat, orientation='h',
-                marker=dict(color=T.PALETTE[i % len(T.PALETTE)], opacity=0.85,
-                            line=dict(color='white', width=1)),
-                text=[T.format_full(v, sym) for v in sub['revenue']],
-                textposition='inside', insidetextanchor='middle',
-                textfont=dict(size=9, color='white'),
-                hovertemplate=(f'<b>%{{y}}</b><br>Category: {cat}<br>'
-                               f'Revenue: {sym}%{{x:,.2f}}<extra></extra>'),
-            ))
-        height = max(380, 30 * len(top_ops) + 120)
-        T.apply_theme(fig, title=_tt(f"Revenue (GMV) by Operator × Product Category · {currency['label']}"),
-                      xaxis_title=_tt(f"Revenue ({sym})"), yaxis_title=None,
-                      barmode='stack', height=height,
-                      legend=dict(orientation="h", yanchor="bottom", y=-0.12, xanchor="left", x=0))
-        return ui.HTML(T.fig_to_html(fig))
-
-    @render.ui
-    @safe_render
-    def operator_category_volume_chart():
-        result = _operator_category_data()
-        if result is None:
-            return ui.HTML('<div style="color:#64748B;padding:20px;">Operator or product category data not available.</div>')
-        agg, currency = result
-        top_ops = agg.groupby('operator', observed=True)['orders'].sum().nlargest(15).index.tolist()
-        d = agg[agg['operator'].isin(top_ops)].copy()
-        op_order = d.groupby('operator', observed=True)['orders'].sum().sort_values(ascending=True).index.tolist()
-        d['operator'] = pd.Categorical(d['operator'], categories=op_order, ordered=True)
-        cats = sorted(d['product_category'].unique().tolist())
-
-        fig = go.Figure()
-        for i, cat in enumerate(cats):
-            sub = d[d['product_category'] == cat].sort_values('operator')
-            fig.add_trace(go.Bar(
-                y=sub['operator'].astype(str), x=sub['orders'],
-                name=cat, orientation='h',
-                marker=dict(color=T.PALETTE[i % len(T.PALETTE)], opacity=0.85,
-                            line=dict(color='white', width=1)),
-                text=[T.format_int(v) for v in sub['orders']],
-                textposition='inside', insidetextanchor='middle',
-                textfont=dict(size=9, color='white'),
-                hovertemplate=(f'<b>%{{y}}</b><br>Category: {cat}<br>'
-                               f'Orders: %{{x:,}}<extra></extra>'),
-            ))
-        height = max(380, 30 * len(top_ops) + 120)
-        T.apply_theme(fig, title=_tt("Order Volume by Operator × Product Category"),
-                      xaxis_title=_tt("Orders"), yaxis_title=None,
-                      barmode='stack', height=height,
-                      legend=dict(orientation="h", yanchor="bottom", y=-0.12, xanchor="left", x=0))
-        return ui.HTML(T.fig_to_html(fig))
 
     def _op_category_pivot_raw():
         """Returns (DataFrame, currency) for the full pivot. Used by table and download."""
@@ -9411,56 +8814,6 @@ def server(input, output, session):
         T.apply_theme(fig, title=_tt("Monthly Customer Acquisition Rate — New Customers by First-Order Month (B2C, Full History)"),
                       xaxis_title=None, yaxis_title=_tt("New Customers"),
                       showlegend=False, margin=dict(l=10, r=10, t=50, b=10))
-        return ui.HTML(T.fig_to_html(fig))
-
-    @render.ui
-    @safe_render
-    def user_source_chart():
-        df = filtered_data()
-        if 'segment' in df.columns:
-            df = df[df['segment'] == 'B2C']
-        src_col = next((c for c in df.columns if c.lower() in ('user_source', '用户来源', 'source', 'channel')), None)
-        if src_col is None or 'user_id' not in df.columns:
-            return ui.HTML('<div style="color:#64748B;padding:20px;">'
-                           'User source (用户来源) column not found in current data.</div>')
-        df2 = df.dropna(subset=[src_col])
-        if df2.empty:
-            return ui.HTML('<div style="color:#64748B;padding:20px;">No user source data available.</div>')
-        currency = currency_converter()
-        grp = df2.groupby(src_col, observed=True)
-        customers_s = grp['user_id'].nunique()  if 'user_id'  in df2.columns else grp.size()
-        orders_s    = grp['order_id'].nunique() if 'order_id' in df2.columns else grp.size()
-        revenue_s   = grp['sales'].sum()        if 'sales'    in df2.columns else pd.Series(0.0, index=customers_s.index)
-        agg = pd.DataFrame({'customers': customers_s, 'orders': orders_s, 'revenue': revenue_s}).reset_index()
-        agg['revenue'] *= currency['rate']
-        agg = agg.sort_values('revenue', ascending=False).head(15)
-        sym = currency['symbol']
-
-        from plotly.subplots import make_subplots
-        fig = make_subplots(
-            rows=1, cols=2,
-            subplot_titles=(_tt("Revenue (GMV) by User Source"), _tt("Customer Count by User Source")),
-            horizontal_spacing=0.12,
-        )
-        fig.add_trace(go.Bar(
-            x=agg[src_col], y=agg['revenue'],
-            marker=dict(color=T.PRIMARY, opacity=0.85),
-            text=[T.format_number(v, sym) for v in agg['revenue']],
-            textposition='outside',
-            hovertemplate='<b>%{x}</b><br>Revenue: ' + sym + '%{y:,.2f}<extra></extra>',
-            name=_tt("Revenue"),
-        ), row=1, col=1)
-        fig.add_trace(go.Bar(
-            x=agg[src_col], y=agg['customers'],
-            marker=dict(color=T.SUCCESS, opacity=0.85),
-            text=[T.format_int(v) for v in agg['customers']],
-            textposition='outside',
-            hovertemplate='<b>%{x}</b><br>Customers: %{y:,}<extra></extra>',
-            name=_tt("Customers"),
-        ), row=1, col=2)
-        T.apply_theme(fig, title=_tt("User Source (用户来源) Analysis — Revenue & Customer Count (B2C)"),
-                      showlegend=False, margin=dict(l=10, r=10, t=70, b=80))
-        fig.update_xaxes(tickangle=-35)
         return ui.HTML(T.fig_to_html(fig))
 
     @render.ui
