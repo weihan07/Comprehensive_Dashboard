@@ -244,15 +244,15 @@ body {
 .metric-card {
     background: var(--surface);
     border-radius: var(--radius);
-    padding: 20px 22px;
-    margin: 8px;
+    padding: 11px 14px;
+    margin: 5px;
     border: 1px solid var(--line);
     box-shadow: var(--shadow-md);
     text-align: left;
     transition: transform 0.18s ease, box-shadow 0.18s ease, border-color 0.18s ease;
     position: relative;
     overflow: hidden;
-    min-width: 200px;
+    min-width: 160px;
     flex: 1;
 }
 
@@ -273,30 +273,30 @@ body {
 
 .metric-card h4 {
     color: var(--muted);
-    margin: 8px 0 6px 0;
-    font-size: 0.74em;
+    margin: 3px 0 3px 0;
+    font-size: 0.68em;
     text-transform: uppercase;
-    letter-spacing: 0.07em;
+    letter-spacing: 0.06em;
     font-weight: 700;
 }
 
 .metric-card p {
-    font-size: 1.9em;
+    font-size: 1.4em;
     font-weight: 750;
-    margin: 0 0 4px 0;
+    margin: 0 0 2px 0;
     color: var(--ink);
-    letter-spacing: -0.025em;
-    line-height: 1.12;
+    letter-spacing: -0.02em;
+    line-height: 1.1;
     font-variant-numeric: tabular-nums;
 }
 
-.metric-card small { font-variant-numeric: tabular-nums; }
+.metric-card small { font-variant-numeric: tabular-nums; font-size: 0.76em; }
 
 /* KPI grid used by Order Status & other KPI strips */
 .metrics-grid {
     display: grid;
-    grid-template-columns: repeat(auto-fit, minmax(225px, 1fr));
-    gap: 4px;
+    grid-template-columns: repeat(auto-fit, minmax(165px, 1fr));
+    gap: 6px;
 }
 
 /* ---- Chart / table cards ---- */
@@ -421,14 +421,14 @@ shiny-data-frame tbody tr:hover td { background: #F6F8FE; }
 
 /* ---- Metric icons: tinted chips instead of bare emoji ---- */
 .metric-icon {
-    font-size: 1.35em;
-    margin-bottom: 10px;
-    width: 44px;
-    height: 44px;
+    font-size: 1.05em;
+    margin-bottom: 5px;
+    width: 32px;
+    height: 32px;
     display: inline-flex;
     align-items: center;
     justify-content: center;
-    border-radius: 11px;
+    border-radius: 9px;
     opacity: 1;
 }
 
@@ -505,7 +505,7 @@ details[open] > .sb-admin-summary { border-radius: 10px 10px 0 0; }
 
 .detail-stat {
     background: var(--surface);
-    padding: 16px;
+    padding: 10px 12px;
     border-radius: 10px;
     border: 1px solid var(--line);
     border-left: 4px solid var(--brand);
@@ -513,19 +513,19 @@ details[open] > .sb-admin-summary { border-radius: 10px 10px 0 0; }
 }
 
 .detail-stat-label {
-    font-size: 0.78em;
+    font-size: 0.72em;
     color: var(--muted);
     text-transform: uppercase;
     letter-spacing: 0.05em;
     font-weight: 700;
-    margin-bottom: 8px;
+    margin-bottom: 4px;
 }
 
 .detail-stat-value {
-    font-size: 1.5em;
+    font-size: 1.25em;
     font-weight: 700;
     color: var(--brand-strong);
-    margin-bottom: 5px;
+    margin-bottom: 3px;
     font-variant-numeric: tabular-nums;
 }
 
@@ -1146,6 +1146,40 @@ def _apply_settlement_currency(df):
     return df
 
 
+_CN_CHAR = _re.compile(r'[一-鿿]')
+
+
+def _merge_product_variants(df):
+    """Same product split by supplier naming should read as ONE product.
+
+    Different suppliers export the same item under slightly different names —
+    spacing ('Telcel 流量' / 'Telcel流量'), case ('Vodafone' / 'vodafone'),
+    EN/CN synonym ('Telkomsel Data' / 'Telkomsel流量'). Rule-based (no hardcoded
+    list): build a canonical key (lower · strip spaces/punct · data/internet→流量)
+    and, per key, pick a display winner — a Chinese-named variant if present,
+    else the most frequent. Original name kept in `product_raw` so suppliers can
+    still be identified. The same case-fold merge is applied to `operator`.
+    """
+    df = df.copy()
+    if 'product' in df.columns:
+        p = df['product'].astype('string').str.strip()
+        df['product_raw'] = p
+        canon = (p.str.lower()
+                  .str.replace(r'[\s\-_/()（）]+', '', regex=True)
+                  .str.replace('internet', 'data', regex=False)
+                  .str.replace('data', '流量', regex=False))
+        valid = p.notna() & (p != "")
+        freq = (pd.DataFrame({'canon': canon[valid], 'raw': p[valid]})
+                  .groupby(['canon', 'raw']).size().rename('n').reset_index())
+        if not freq.empty:
+            freq['has_cn'] = freq['raw'].str.contains(_CN_CHAR, na=False)
+            freq = freq.sort_values(['has_cn', 'n'], ascending=[False, False])
+            winner = freq.groupby('canon').first()['raw']
+            mapped = canon.map(winner)
+            df['product'] = mapped.where(mapped.notna(), p)
+    return df
+
+
 def _enrich_columns(df):
     """Cross-segment enrichment using the newly-loaded columns.
 
@@ -1154,6 +1188,8 @@ def _enrich_columns(df):
        the product name with marketing suffixes stripped ('Digi话费' → 'Digi').
     2. Normalise the 是/否 flag columns — the raw exports contain occasional
        stray values (e.g. a country name) that would pollute groupbys.
+    3. Merge supplier-specific product/operator name variants (see
+       `_merge_product_variants`).
     """
     df = df.copy()
     if 'operator' in df.columns:
@@ -1174,6 +1210,17 @@ def _enrich_columns(df):
         if col in df.columns:
             s = df[col].astype('string').str.strip()
             df[col] = s.where(s.isin(_YESNO_OK), pd.NA)
+    df = _merge_product_variants(df)
+    # Case-fold merge for operator ('Du' / 'du' → one label, the most frequent case).
+    if 'operator' in df.columns:
+        o = df['operator'].astype('string').str.strip()
+        valid = o.notna() & (o != "")
+        ofreq = (pd.DataFrame({'lc': o[valid].str.lower(), 'raw': o[valid]})
+                   .groupby(['lc', 'raw']).size().rename('n').reset_index())
+        if not ofreq.empty:
+            owin = ofreq.sort_values('n', ascending=False).groupby('lc').first()['raw']
+            om = o.str.lower().map(owin)
+            df['operator'] = om.where(om.notna(), o)
     df = _apply_settlement_currency(df)
     return df
 
@@ -1574,7 +1621,7 @@ _GUIDELINE_TABS = [
         ("🚨 Anomaly Detection & Alerts", "🚨 异常检测与预警", "KPI alerts", "Auto-flags slipping/surging operators & markets (7d vs 4-wk).", "自动标记异常的运营商与市场（近7天 vs 前4周）。"),
         ("📊 Key Performance Indicators", "📊 核心绩效指标", "KPI cards", "GMV/orders/客单价/customers/markets/MoM/margin.", "营业额/订单/客单价/客户/市场/环比/毛利。"),
         ("⚡ PoP Top Movers", "⚡ 环比变动榜", "Delta cards", "Biggest revenue movers vs the prior equal period.", "与上期相比变动最大的市场与运营商。"),
-        ("📈 Revenue & Order Volume Trend", "📈 收入与订单量趋势", "Bar + line", "GMV bars vs orders line — momentum.", "营业额柱 vs 订单线 — 走势。"),
+        ("📈 Revenue by Top-10 Markets + Order Volume", "📈 前10市场收入+订单量", "Stacked bars + line", "GMV split by top markets (stacked) + orders line + target; follows Reporting Period.", "按前10市场堆叠GMV+订单线+目标；跟随报告周期。"),
         ("🥧 Revenue by Customer Segment", "🥧 各客户分类收入", "Donut", "B2B vs B2C share of GMV.", "B2B 与 B2C 营业额占比。"),
         ("🌐 Revenue Contribution by Region", "🌐 各地区收入贡献", "Donut", "Regional concentration / diversification.", "区域集中度 / 多元化。"),
         ("🏆 Top 5 Markets by Revenue", "🏆 收入前5市场", "Bar (H)", "Highest-value countries at a glance.", "价值最高的国家速览。"),
@@ -1589,11 +1636,10 @@ _GUIDELINE_TABS = [
     ]),
     ("💰", "Revenue & Orders", "收入与订单", [
         ("💰 Revenue & Orders KPIs", "💰 收入与订单核心指标", "KPI cards", "营业额/orders/客单价/customers/margin/success.", "营业额/订单/客单价/客户/毛利/成单率。"),
-        ("💎 Revenue / Orders / 客单价 by Segment", "💎 各分部 收入/订单/客单价", "Bars", "B2B vs B2C on each money metric.", "B2B vs B2C 各金额指标。"),
+        ("💰 Segment Overview — GMV·Orders·Status", "💰 分类总览 收入·订单·状态", "Bars+line", "Per segment: status order-count bars + GMV line (merged view).", "每分类：按状态订单量柱+GMV线（合并图）。"),
         ("📋 Revenue & Orders by Market", "📋 各市场收入与订单", "Table", "Per-country B2B/B2C revenue/orders/客单价/margin.", "各国 B2B/B2C 营业额/订单/客单价/毛利。"),
         ("🚦 Order Status KPIs", "🚦 订单状态指标", "KPI cards", "Success / refund / cancellation rates.", "成单率 / 退款率 / 取消率。"),
-        ("📊 Order Count by Status × Segment", "📊 各状态×分部订单量", "Stacked bar", "Where refunds/cancellations concentrate.", "退款/取消集中在哪。"),
-        ("📉 Monthly Refund Rate Trend", "📉 月度退款率趋势", "Line", "Refund-rate trajectory by segment.", "各分部退款率走势。"),
+        ("📉 Refund Rate Trend", "📉 退款率趋势", "Line", "Refund-rate trajectory by segment (follows Reporting Period).", "各分部退款率走势（跟随报告周期）。"),
         ("⚠ Refund Rate by Operator (Top 10)", "⚠ 各运营商退款率（前10）", "Bar (H)", "Operators with worst refund rates (≥200).", "退款率最高的运营商（≥200单）。"),
     ]),
     ("🌍", "Market Intelligence", "市场洞察", [
@@ -2159,7 +2205,6 @@ app_ui = ui.page_sidebar(
                 style="margin: 10px 0 0 0; opacity: 0.8;"),
             class_="main-header"
         ),
-        ui.output_ui("staleness_banner"),
         ui.HTML(
             '<div style="background:#FFF7ED;border:1px solid #FED7AA;color:#9A3412;'
             'padding:8px 14px;border-radius:8px;margin:6px 0 4px;font-size:0.82em;line-height:1.5;">'
@@ -2200,7 +2245,7 @@ app_ui = ui.page_sidebar(
                 # ── Trend + mix ───────────────────────────────────────────────
                 ui.div(
                     ui.div(
-                        _bh3("📈 Revenue & Order Volume Trend", "📈 收入与订单量趋势"),
+                        _bh3("📈 Revenue by Top Markets + Order Volume", "📈 各市场收入 + 订单量趋势"),
                         ui.output_ui("overview_sales_trend"),
                         class_="chart-container"
                     ),
@@ -2359,10 +2404,12 @@ app_ui = ui.page_sidebar(
                     class_="chart-container"
                 ),
                 ui.div(
-                    _bh3("💰 Revenue (GMV) by Customer Segment", "💰 各客户分类收入 (GMV)"),
-                    _bp("Revenue split between B2B (Agent) and B2C (Master) customer segments.",
-                        "B2B（代理渠道）与 B2C（主渠道）客户分类的收入分布。"),
-                    ui.output_ui("sales_segment_chart"),
+                    _bh3("💰 Segment Overview — GMV · Orders · Status", "💰 分类总览 — 收入·订单·状态"),
+                    _bp("One view per segment (B2B/B2C): stacked bars = order count by status, "
+                        "line = GMV. Combines the old GMV, order-volume and status×segment charts.",
+                        "每个分类（B2B/B2C）一张图：堆叠柱=按状态订单量，折线=GMV。"
+                        "合并了原收入、订单量、状态×分类三张图。"),
+                    ui.output_ui("segment_overview_chart"),
                     class_="chart-container"
                 ),
                 ui.div(
@@ -2419,25 +2466,11 @@ app_ui = ui.page_sidebar(
                 _more_details(
                     "📦 Segment & status detail", "📦 分类与状态明细",
                 ui.div(
-                    _bh3("📦 Order Volume by Customer Segment", "📦 各客户分类订单量"),
-                    _bp("Number of unique orders placed by B2B vs B2C customers.",
-                        "B2B 与 B2C 客户的独立订单数量对比。"),
-                    ui.output_ui("orders_segment_chart"),
-                    class_="chart-container"
-                ),
-                ui.div(
                     _bh3("💎 Average Order Value (AOV) by Customer Segment", "💎 各客户分类客单价 (AOV)",
                          _help("AOV = Total Revenue ÷ Total Orders for each segment.")),
                     _bp("Higher AOV signals stronger per-transaction value; guide pricing strategy and promotions.",
                         "高 AOV 代表每笔交易价值更强，用于指导定价策略和分部促销活动。"),
                     ui.output_ui("aov_by_segment_chart"),
-                    class_="chart-container"
-                ),
-                ui.div(
-                    _bh3("📊 Order Count by Status × Segment", "📊 各状态 × 客户分类订单量"),
-                    _bp("Compare how B2B and B2C orders distribute across success, refund, and cancellation.",
-                        "对比 B2B 与 B2C 订单在成功、退款、取消之间的分布。"),
-                    ui.output_ui("order_status_breakdown_chart"),
                     class_="chart-container"
                 ),
                 ),
@@ -4042,50 +4075,6 @@ def server(input, output, session):
                 df = df[df['product_category'].astype(str).isin(selected_types)]
         return df
 
-    @render.ui
-    @safe_render
-    def staleness_banner():
-        """Show a warning at the top when the source xlsx files are newer
-        than the rolling database (i.e. user has edited source but not
-        clicked Reload from source yet)."""
-        s = db_utils.source_freshness()
-        if not s["any_stale"]:
-            return ui.HTML("")
-        parts = []
-        if s["agent_stale"]:
-            parts.append(
-                f"Agent Data.xlsx edited {s['source_agent_mtime'].strftime('%Y-%m-%d %H:%M')} "
-                f"(rolling DB: {s['db_agent_mtime'].strftime('%Y-%m-%d %H:%M')})"
-            )
-        if s["master_stale"]:
-            parts.append(
-                f"Master Data.xlsx edited {s['source_master_mtime'].strftime('%Y-%m-%d %H:%M')} "
-                f"(rolling DB: {s['db_master_mtime'].strftime('%Y-%m-%d %H:%M')})"
-            )
-        return ui.tags.div(
-            ui.tags.div(
-                ui.tags.span("⚠", style="font-size: 1.3em; margin-right: 10px; vertical-align: middle;"),
-                ui.tags.span("Source xlsx is newer than the rolling database — dashboard is showing OLD data.",
-                             style="font-weight: 700; color: #92400E;"),
-                style="margin-bottom: 6px;"
-            ),
-            ui.tags.div(
-                *[ui.tags.div("• " + p, style="margin-left: 28px;") for p in parts],
-                style="color: #78350F; font-size: 0.88em;"
-            ),
-            ui.tags.div(
-                ui.tags.span("→ Click ", style="color: #78350F; font-size: 0.88em;"),
-                ui.tags.span("🔄 Reload from source xlsx", style="font-weight: 700; color: #92400E;"),
-                ui.tags.span(" in the sidebar to apply your changes (takes 5–10 minutes).",
-                             style="color: #78350F; font-size: 0.88em;"),
-                style="margin-top: 8px; margin-left: 28px;"
-            ),
-            style=("background: linear-gradient(135deg, #FEF3C7 0%, #FED7AA 100%);"
-                   "border: 1px solid #F59E0B; border-left: 5px solid #D97706;"
-                   "padding: 14px 18px; margin: 10px; border-radius: 10px;"
-                   "box-shadow: 0 2px 6px rgba(217, 119, 6, 0.15);")
-        )
-
     # ------------------------------------------------------------------
     # Export helpers
     # ------------------------------------------------------------------
@@ -4720,7 +4709,7 @@ def server(input, output, session):
                 title=tooltip
             ),
             class_="metric-card",
-            style="flex: 1 1 23%; min-width: 220px; max-width: 23%;"
+            style="flex: 1 1 22%; min-width: 165px; max-width: 24%;"
         )
 
     # ------------------------------------------------------------------
@@ -4846,45 +4835,38 @@ def server(input, output, session):
         }
 
     def _alert_card(entity, recent_val, baseline_val, pct, sym, color):
-        delta_arrow = "▼" if pct is not None and pct < 0 else ("▲" if pct is not None else "•")
+        """One compact full-width row: entity · Δ% · recent vs baseline."""
+        arrow = "▼" if pct is not None and pct < 0 else ("▲" if pct is not None else "•")
         pct_txt = T.format_pct(pct) if pct is not None else ""
         return ui.tags.div(
-            ui.tags.div(entity, style="font-weight: 700; color: #0F172A; "
-                                     "font-size: 0.95em; line-height: 1.2; "
-                                     "margin-bottom: 6px; word-break: break-word;"),
-            ui.tags.div(
-                ui.tags.span(f"{delta_arrow} {pct_txt}", style=f"color:{color}; font-weight:600;"),
-                style="font-size: 0.95em; margin-bottom: 4px;"
-            ),
-            ui.tags.div(
-                f"{T.format_number(recent_val, sym)}  ·  baseline {T.format_number(baseline_val, sym)}/wk",
-                style="font-size: 0.78em; color: #64748B;"
-            ),
-            style=("flex: 0 0 200px; padding: 12px 14px; border-radius: 10px;"
-                   "background: white; border: 1px solid #E2E8F0;"
-                   f"border-left: 4px solid {color};"
-                   "box-shadow: 0 1px 3px rgba(15,23,42,0.04);")
+            ui.tags.span(entity, style="font-weight:700; color:#0F172A; flex:1 1 auto; "
+                                       "min-width:0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap;"),
+            ui.tags.span(f"{arrow} {pct_txt}",
+                         style=f"color:{color}; font-weight:700; flex:0 0 auto; margin:0 12px;"),
+            ui.tags.span(f"{T.format_number(recent_val, sym)} · base {T.format_number(baseline_val, sym)}/wk",
+                         style="font-size:0.76em; color:#64748B; flex:0 0 auto; white-space:nowrap;"),
+            style=("display:flex; align-items:center; width:100%; padding:7px 12px; margin-bottom:5px;"
+                   "border-radius:8px; background:white; border:1px solid #E2E8F0;"
+                   f"border-left:4px solid {color}; box-shadow:0 1px 2px rgba(15,23,42,0.03);")
         )
 
     def _new_entity_card(entity, label, color):
         return ui.tags.div(
-            ui.tags.div(entity,
-                        style="font-weight: 700; color: #0F172A; font-size: 0.9em;"
-                              "word-break: break-word; line-height: 1.2;"),
-            ui.tags.div(label, style="font-size: 0.72em; color: #64748B; margin-top: 4px;"),
-            style=("flex: 0 0 180px; padding: 10px 14px; border-radius: 10px;"
-                   "background: white; border: 1px solid #E2E8F0;"
-                   f"border-left: 4px solid {color};"
-                   "box-shadow: 0 1px 3px rgba(15,23,42,0.04);")
+            ui.tags.span(entity, style="font-weight:700; color:#0F172A; font-size:0.9em; flex:1 1 auto; "
+                                       "min-width:0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap;"),
+            ui.tags.span(label, style="font-size:0.72em; color:#64748B; flex:0 0 auto; margin-left:12px;"),
+            style=("display:flex; align-items:center; width:100%; padding:6px 12px; margin-bottom:5px;"
+                   "border-radius:8px; background:white; border:1px solid #E2E8F0;"
+                   f"border-left:4px solid {color}; box-shadow:0 1px 2px rgba(15,23,42,0.03);")
         )
 
     def _alert_row(title, icon, frame, color, sym, empty_text):
         if frame is None or frame.empty:
             return ui.div(
                 ui.tags.h5(f"{icon} {title}",
-                           style="margin: 14px 0 8px 0; font-size: 0.95em; color: #0F172A;"),
+                           style="margin: 12px 0 6px 0; font-size: 0.9em; color: #0F172A;"),
                 ui.tags.div(empty_text,
-                            style="color: #94A3B8; font-size: 0.85em; font-style: italic;"),
+                            style="color: #94A3B8; font-size: 0.82em; font-style: italic;"),
             )
         cards = [
             _alert_card(row['entity'], row['recent'], row['baseline'], row.get('pct'), sym, color)
@@ -4892,8 +4874,8 @@ def server(input, output, session):
         ]
         return ui.div(
             ui.tags.h5(f"{icon} {title}",
-                       style="margin: 14px 0 8px 0; font-size: 0.95em; color: #0F172A;"),
-            ui.tags.div(*cards, style="display:flex; gap:10px; flex-wrap:wrap;")
+                       style="margin: 12px 0 6px 0; font-size: 0.9em; color: #0F172A;"),
+            ui.tags.div(*cards, style="display:flex; flex-direction:column;")
         )
 
     @render.ui
@@ -4939,9 +4921,9 @@ def server(input, output, session):
         new_section = []
         if new_op_cards or new_co_cards:
             new_section = [ui.tags.h5("✨ New entrants in the last 7 days",
-                                       style="margin: 14px 0 8px 0; font-size: 0.95em; color: #0F172A;"),
+                                       style="margin: 12px 0 6px 0; font-size: 0.9em; color: #0F172A;"),
                            ui.tags.div(*(new_op_cards + new_co_cards),
-                                       style="display:flex; gap:10px; flex-wrap:wrap;")]
+                                       style="display:flex; flex-direction:column;")]
 
         return ui.div(
             ui.tags.div(
@@ -5431,20 +5413,21 @@ def server(input, output, session):
         sym = currency['symbol']
 
         def _mover_card(title, icon, name, value, change, color):
-            change_str = T.format_pct(change) if change is not None else "—"
+            """Compact full-width row: icon · title · entity · value · Δ%."""
+            change_str = T.format_pct(change) if change is not None else None
             return ui.tags.div(
-                ui.tags.div(icon, style="font-size: 1.4em; margin-bottom: 6px;"),
-                ui.tags.div(title, style="font-size: 0.78em; color:#64748B; text-transform: uppercase; letter-spacing:0.5px; font-weight:600;"),
-                ui.tags.div(name, style="font-size: 1.15em; font-weight: 700; color:#0F172A; margin-top:4px; line-height: 1.2;"),
-                ui.tags.div(
-                    ui.tags.span(value, style="color:#475569; font-size:0.9em;"),
-                    ui.tags.span(f" · {change_str}", style=f"color:{color}; font-weight:600;") if change is not None else "",
-                    style="margin-top:6px;"
-                ),
-                style=("flex:1 1 22%; min-width:220px; padding:18px; border-radius:12px;"
-                       "background:white; border:1px solid #E2E8F0;"
-                       "box-shadow: 0 1px 3px rgba(15,23,42,0.04);"
-                       f"border-left: 4px solid {color};"),
+                ui.tags.span(icon, style="font-size:1.2em; flex:0 0 auto; margin-right:10px;"),
+                ui.tags.span(title, style="font-size:0.72em; color:#64748B; text-transform:uppercase; "
+                                          "letter-spacing:0.4px; font-weight:600; flex:0 0 128px;"),
+                ui.tags.span(name, style="font-weight:700; color:#0F172A; flex:1 1 auto; min-width:0; "
+                                         "overflow:hidden; text-overflow:ellipsis; white-space:nowrap;"),
+                ui.tags.span(value, style="color:#475569; font-size:0.85em; flex:0 0 auto; margin:0 10px;"),
+                ui.tags.span(change_str if change_str else "",
+                             style=f"color:{color}; font-weight:700; flex:0 0 auto;"),
+                style=("display:flex; align-items:center; width:100%; padding:8px 14px; margin-bottom:6px;"
+                       "border-radius:10px; background:white; border:1px solid #E2E8F0;"
+                       "box-shadow:0 1px 2px rgba(15,23,42,0.03);"
+                       f"border-left:4px solid {color};"),
             )
 
         # Country: best riser & worst decliner (current vs previous period)
@@ -5499,71 +5482,110 @@ def server(input, output, session):
                                  T.format_number(top_o_value, sym), None, T.SECONDARY))
 
         return ui.tags.div(*cards,
-                           style="display:flex; gap:12px; flex-wrap:wrap;")
+                           style="display:flex; flex-direction:column;")
 
     @render.ui
     @safe_render
     def top_movers_strip():
         return _movers_cards()
 
+    _PERIOD_FREQ = {"Daily": None, "Weekly": "W", "Monthly": "M",
+                    "Quarterly": "Q", "Yearly": "Y"}
+
+    def _bucket_time(series):
+        """Bucket an order_time series by the sidebar Reporting Period
+        (Daily/Weekly/Monthly/Quarterly/Yearly). Daily → date; else period-start
+        timestamp. Lets time-trend charts follow the selected granularity."""
+        period = applied_trend_period() or "Monthly"
+        dt = pd.to_datetime(series, errors='coerce')
+        if period == "Daily":
+            return dt.dt.date
+        return dt.dt.to_period(_PERIOD_FREQ.get(period, "M")).dt.start_time
+
+    def _period_word():
+        """Bilingual-safe single word for the current Reporting Period, for titles."""
+        return applied_trend_period() or "Monthly"
+
     @render.ui
     @safe_render
     def overview_sales_trend():
+        """Revenue split by Top-10 countries (stacked bars) + total order-volume
+        line on a secondary axis + the dashed monthly target — one chart, three
+        signals. Bars/line bucket by the sidebar Reporting Period."""
+        from plotly.subplots import make_subplots
         df = filtered_data()
         if 'order_time' not in df.columns or 'sales' not in df.columns:
             return _no_data()
         currency = currency_converter()
-        symbol = currency['symbol']
+        symbol = currency['symbol']; rate = currency['rate']
         period = applied_trend_period() or "Monthly"
-        period_freq = {"Daily": None, "Weekly": "W", "Monthly": "M", "Quarterly": "Q", "Yearly": "Y"}
-        if period == "Daily":
-            grouped = df.groupby(df['order_time'].dt.date)
+        d = df.dropna(subset=['order_time']).copy()
+        d['bucket'] = _bucket_time(d['order_time'])
+
+        # Top-10 countries by revenue; the rest folded into "Others".
+        if 'country' in d.columns:
+            top = (d.groupby('country', observed=True)['sales'].sum()
+                     .nlargest(10).index.astype(str).tolist())
+            d['ctry'] = d['country'].astype(str).where(d['country'].astype(str).isin(top), 'Others')
         else:
-            grouped = df.groupby(df['order_time'].dt.to_period(period_freq[period]).dt.start_time)
-        sales_trend = grouped['sales'].sum().mul(currency['rate']).reset_index()
-        sales_trend.columns = ['order_time', 'sales']
+            top = ['All']; d['ctry'] = 'All'
+        order_col = 'order_id' if 'order_id' in d.columns else None
+
+        rev = (d.groupby(['bucket', 'ctry'], observed=True)['sales'].sum().mul(rate)
+                 .reset_index())
+        vol = (d.groupby('bucket', observed=True)[order_col].nunique().reset_index()
+               if order_col else d.groupby('bucket', observed=True).size().reset_index(name='n'))
+        vol.columns = ['bucket', 'orders']
 
         filter_summary = []
-        seg = applied_segment()
-        ctr = applied_country()
-        reg = applied_region()
-        if seg and seg != "All":
-            filter_summary.append(f"Segment: {seg}")
-        if reg and reg != "All":
-            filter_summary.append(f"Region: {reg}")
-        if ctr and ctr != "All":
-            filter_summary.append(f"Country: {ctr}")
-        filter_note = " · ".join(filter_summary) if filter_summary else "All segments · All regions · All countries"
+        seg = applied_segment(); ctr = applied_country(); reg = applied_region()
+        if seg and seg != "All": filter_summary.append(f"Segment: {seg}")
+        if reg and reg != "All": filter_summary.append(f"Region: {reg}")
+        if ctr and ctr != "All": filter_summary.append(f"Country: {ctr}")
+        filter_note = " · ".join(filter_summary) if filter_summary else "All segments · regions · markets"
 
-        fig = go.Figure()
+        fig = make_subplots(specs=[[{"secondary_y": True}]])
+        order = [c for c in top if c in set(rev['ctry'])] + (['Others'] if 'Others' in set(rev['ctry']) else [])
+        pal = getattr(T, 'PALETTE', None) or ['#5B6CFF']
+        for i, c in enumerate(order):
+            sub = rev[rev['ctry'] == c]
+            color = '#CBD5E1' if c == 'Others' else pal[i % len(pal)]
+            fig.add_trace(go.Bar(
+                x=sub['bucket'], y=sub['sales'], name=c,
+                marker=dict(color=color),
+                hovertemplate='<b>%{x|%Y-%m-%d}</b> · ' + c + '<br>' + symbol + '%{y:,.0f}<extra></extra>',
+            ), secondary_y=False)
         fig.add_trace(go.Scatter(
-            x=sales_trend['order_time'], y=sales_trend['sales'],
-            mode='lines+markers', name=_tt('Sales'),
-            line=dict(color=T.PRIMARY, width=2.5, shape='spline'),
-            marker=dict(size=6, color=T.PRIMARY, line=dict(width=1.5, color='white')),
-            fill='tozeroy', fillcolor='rgba(91,108,255,0.10)',
-            hovertemplate='<b>%{x|%Y-%m-%d}</b><br>Sales: ' + symbol + '%{y:,.2f}<extra></extra>',
-        ))
-        # 3.2 Targets vs-plan: dashed plan line from database/targets.csv (per-month revenue target)
+            x=vol['bucket'], y=vol['orders'], name=_tt('Order volume'),
+            mode='lines+markers', line=dict(color='#0F172A', width=2.5, shape='spline'),
+            marker=dict(size=6, color='#0F172A', line=dict(width=1.5, color='white')),
+            hovertemplate='<b>%{x|%Y-%m-%d}</b><br>Orders: %{y:,}<extra></extra>',
+        ), secondary_y=True)
+
+        # Dashed monthly target on the revenue axis (targets.csv).
         targets = _load_targets()
         if targets:
-            months = pd.to_datetime(sales_trend['order_time']).dt.to_period('M').astype(str)
+            buckets = sorted(rev['bucket'].unique())
+            months = pd.to_datetime(pd.Series(buckets)).dt.to_period('M').astype(str)
             tvals = [(targets.get(('revenue', m)) or targets.get(('gmv', m))) for m in months]
-            tvals_disp = [(v * currency['rate']) if v is not None else None for v in tvals]
+            tvals_disp = [(v * rate) if v is not None else None for v in tvals]
             if any(v is not None for v in tvals_disp):
                 fig.add_trace(go.Scatter(
-                    x=sales_trend['order_time'], y=tvals_disp,
-                    mode='lines', name=_tt('Target'),
-                    line=dict(color=T.WARNING, width=2, dash='dash'),
+                    x=buckets, y=tvals_disp, name=_tt('Target'),
+                    mode='lines', line=dict(color=T.WARNING, width=2, dash='dash'),
                     connectgaps=False,
                     hovertemplate='<b>%{x|%Y-%m}</b><br>Target: ' + symbol + '%{y:,.0f}<extra></extra>',
-                ))
-        T.apply_theme(fig, title=_tt(f"{period} Sales Trend"),
-                      xaxis_title=None, yaxis_title=_tt(f"Sales ({symbol})"),
-                      hovermode='x unified', margin=dict(l=10, r=10, t=70, b=10),
+                ), secondary_y=False)
+
+        fig.update_layout(barmode='stack')
+        T.apply_theme(fig, title=_tt(f"{period} Revenue by Top-10 Markets + Order Volume"),
+                      margin=dict(l=10, r=10, t=70, b=10),
+                      legend=dict(orientation="h", yanchor="bottom", y=-0.22, xanchor="left", x=0),
                       annotations=[dict(text=filter_note, xref='paper', yref='paper',
-                                        x=0, y=1.08, showarrow=False,
+                                        x=0, y=1.10, showarrow=False,
                                         font=dict(size=11, color=T.NEUTRAL))])
+        fig.update_yaxes(title_text=_tt(f"Revenue ({symbol})"), secondary_y=False)
+        fig.update_yaxes(title_text=_tt("Orders"), secondary_y=True, showgrid=False)
         return ui.HTML(T.fig_to_html(fig))
 
     @render.ui
@@ -5779,22 +5801,58 @@ def server(input, output, session):
 
     @render.ui
     @safe_render
-    def sales_segment_chart():
-        df = filtered_data()
-        if 'segment' not in df.columns or 'sales' not in df.columns:
-            return _no_data()
-        currency = currency_converter()
-        seg = df.groupby('segment', observed=True)['sales'].sum().mul(currency['rate']).reset_index()
-        fig = go.Figure(go.Bar(
-            x=seg['segment'], y=seg['sales'],
-            marker=dict(color=T.PALETTE[:len(seg)], line=dict(color='white', width=1)),
-            text=[T.format_number(v, currency['symbol']) for v in seg['sales']],
-            textposition='outside', textfont=dict(size=12, color="#334155"),
-            hovertemplate='<b>%{x}</b><br>Sales: ' + currency['symbol'] + '%{y:,.0f}<extra></extra>',
-        ))
-        T.apply_theme(fig, title=_tt(f"Sales by segment · {currency['label']}"),
-                      xaxis_title=None, yaxis_title=_tt(f"Sales ({currency['symbol']})"),
-                      showlegend=False)
+    def segment_overview_chart():
+        """One chart for the whole segment picture: order count by status
+        (stacked bars) per segment + GMV on a secondary axis. Merges the old
+        GMV-by-segment, orders-by-segment and status×segment charts."""
+        from plotly.subplots import make_subplots
+        currency = currency_converter(); rate, sym = currency['rate'], currency['symbol']
+        d = _status_frame()
+        if d is None or 'segment' not in d.columns:
+            # Fallback: plain GMV-by-segment when 订单状态 isn't available.
+            df = filtered_data()
+            if 'segment' not in df.columns or 'sales' not in df.columns:
+                return _no_data()
+            seg = df.groupby('segment', observed=True)['sales'].sum().mul(rate).reset_index()
+            fig = go.Figure(go.Bar(
+                x=seg['segment'], y=seg['sales'],
+                marker=dict(color=[T.SEGMENT_COLORS.get(str(s), T.PRIMARY) for s in seg['segment']],
+                            line=dict(color='white', width=1)),
+                text=[T.format_number(v, sym) for v in seg['sales']], textposition='outside'))
+            T.apply_theme(fig, title=_tt(f"GMV by segment · {currency['label']}"),
+                          showlegend=False, yaxis_title=_tt(f"GMV ({sym})"))
+            return ui.HTML(T.fig_to_html(fig))
+
+        segs = sorted(d['segment'].dropna().astype(str).unique().tolist())
+        oc = 'order_id' if 'order_id' in d.columns else None
+        if oc:
+            cnt = d.groupby(['segment', 'status_group'], observed=True)[oc].nunique().reset_index(name='orders')
+        else:
+            cnt = d.groupby(['segment', 'status_group'], observed=True).size().reset_index(name='orders')
+        gmv = d.groupby('segment', observed=True)['sales'].sum().mul(rate)
+        status_order = ["Successful", "Refunded", "Cancelled", "Pending", "Other"]
+        status_color = {"Successful": T.SUCCESS, "Refunded": T.DANGER, "Cancelled": "#F59E0B",
+                        "Pending": "#94A3B8", "Other": "#CBD5E1"}
+        fig = make_subplots(specs=[[{"secondary_y": True}]])
+        for st in [s for s in status_order if s in set(cnt['status_group'])]:
+            sub = cnt[cnt['status_group'] == st].set_index('segment')['orders']
+            fig.add_trace(go.Bar(
+                x=segs, y=[float(sub.get(s, 0)) for s in segs], name=st,
+                marker=dict(color=status_color.get(st, '#CBD5E1')),
+                hovertemplate='<b>%{x}</b> · ' + st + '<br>%{y:,} orders<extra></extra>',
+            ), secondary_y=False)
+        fig.add_trace(go.Scatter(
+            x=segs, y=[float(gmv.get(s, 0)) for s in segs], name=_tt('GMV'),
+            mode='markers+lines', line=dict(color='#0F172A', width=2),
+            marker=dict(size=13, color='#0F172A', line=dict(color='white', width=1.5)),
+            hovertemplate='<b>%{x}</b><br>GMV: ' + sym + '%{y:,.0f}<extra></extra>',
+        ), secondary_y=True)
+        fig.update_layout(barmode='stack')
+        T.apply_theme(fig, title=_tt(f"Segment — order status (bars) + GMV (line) · {currency['label']}"),
+                      margin=dict(l=10, r=10, t=60, b=10),
+                      legend=dict(orientation="h", yanchor="bottom", y=-0.2, xanchor="left", x=0))
+        fig.update_yaxes(title_text=_tt("Orders"), secondary_y=False)
+        fig.update_yaxes(title_text=_tt(f"GMV ({sym})"), secondary_y=True, showgrid=False)
         return ui.HTML(T.fig_to_html(fig))
 
     @render.data_frame
@@ -5881,40 +5939,6 @@ def server(input, output, session):
 
     @render.ui
     @safe_render
-    def order_status_breakdown_chart():
-        d = _status_frame()
-        if d is None:
-            return ui.HTML('<div style="color:#64748B;padding:20px;">Order status data not available.</div>')
-        if 'segment' not in d.columns:
-            return ui.HTML('<div style="color:#64748B;padding:20px;">Segment column not available.</div>')
-        grp = d.groupby(['status_group', 'segment'], observed=True)
-        orders_s = grp['order_id'].nunique() if 'order_id' in d.columns else grp.size()
-        agg = orders_s.reset_index(name=_tt('orders'))
-        agg = agg[agg['orders'] > 0]
-        if agg.empty:
-            return ui.HTML('<div style="color:#64748B;padding:20px;">No orders in the current selection.</div>')
-        status_order = ["Successful", "Refunded", "Cancelled", "Pending", "Other"]
-        colors = {"Successful": T.SUCCESS, "Refunded": T.DANGER, "Cancelled": "#F59E0B",
-                  "Pending": "#94A3B8", "Other": "#CBD5E1"}
-        fig = go.Figure()
-        for st in status_order:
-            sub = agg[agg['status_group'] == st]
-            if sub.empty:
-                continue
-            fig.add_trace(go.Bar(
-                x=sub['segment'].astype(str), y=sub['orders'],
-                name=st,
-                marker=dict(color=colors.get(st, T.PRIMARY), line=dict(color='white', width=1)),
-                hovertemplate='<b>%{x}</b><br>' + st + ': %{y:,} orders<extra></extra>',
-            ))
-        fig.update_layout(barmode='stack')
-        T.apply_theme(fig, title=_tt("Order Count by Status × Segment"),
-                      xaxis_title=None, yaxis_title=_tt("Orders"), height=400,
-                      legend=dict(orientation="h", yanchor="bottom", y=-0.25, xanchor="left", x=0))
-        return ui.HTML(T.fig_to_html(fig))
-
-    @render.ui
-    @safe_render
     def refund_trend_chart():
         d = _status_frame()
         if d is None:
@@ -5924,7 +5948,7 @@ def server(input, output, session):
         d = d.dropna(subset=['order_time']).copy()
         if d.empty:
             return ui.HTML('<div style="color:#64748B;padding:20px;">No dated orders in the current selection.</div>')
-        d['month'] = d['order_time'].dt.to_period('M').dt.start_time
+        d['month'] = _bucket_time(d['order_time'])
         segs = sorted(d['segment'].dropna().astype(str).unique().tolist()) if 'segment' in d.columns else ['All']
         fig = go.Figure()
         palette = T.PALETTE
@@ -5950,7 +5974,7 @@ def server(input, output, session):
             ))
         if not fig.data:
             return ui.HTML('<div style="color:#64748B;padding:20px;">Not enough data to compute monthly refund rates.</div>')
-        T.apply_theme(fig, title=_tt("Monthly Refund Rate by Segment"),
+        T.apply_theme(fig, title=_tt(f"{_period_word()} Refund Rate by Segment"),
                       xaxis_title=None, yaxis_title=_tt("Refund rate (%)"),
                       hovermode='x unified', height=400,
                       legend=dict(orientation="h", yanchor="bottom", y=-0.22, xanchor="left", x=0))
@@ -6013,24 +6037,6 @@ def server(input, output, session):
         T.apply_theme(fig, title=_tt("Top 10 countries by orders"),
                       xaxis_title=_tt("Orders"), yaxis_title=None,
                       margin=dict(l=10, r=80, t=50, b=10))
-        return ui.HTML(T.fig_to_html(fig))
-
-    @render.ui
-    @safe_render
-    def orders_segment_chart():
-        df = filtered_data()
-        if 'segment' not in df.columns or 'order_id' not in df.columns:
-            return _no_data()
-        so = df.groupby('segment', observed=True)['order_id'].nunique().reset_index()
-        fig = go.Figure(go.Bar(
-            x=so['segment'], y=so['order_id'],
-            marker=dict(color=T.PALETTE[:len(so)], line=dict(color='white', width=1)),
-            text=[T.format_int(v) for v in so['order_id']],
-            textposition='outside', textfont=dict(size=12, color="#334155"),
-            hovertemplate='<b>%{x}</b><br>Orders: %{y:,}<extra></extra>',
-        ))
-        T.apply_theme(fig, title=_tt("Orders by segment"),
-                      xaxis_title=None, yaxis_title=_tt("Orders"), showlegend=False)
         return ui.HTML(T.fig_to_html(fig))
 
     @render.data_frame
@@ -6989,7 +6995,7 @@ def server(input, output, session):
         currency = currency_converter()
         rate = currency['rate']
         d = df.copy()
-        d['month'] = d['order_time'].dt.to_period('M').dt.start_time
+        d['month'] = _bucket_time(d['order_time'])
         _mgrp = d.groupby(['month', 'operator'], observed=True)
         agg = pd.DataFrame({'sales': _mgrp['sales'].sum(),
                             'settle': _mgrp[_settle_col(d)].sum()}).reset_index()
@@ -7111,7 +7117,7 @@ def server(input, output, session):
             return _no_data()
         currency = currency_converter()
         d = df.copy()
-        d['month'] = d['order_time'].dt.to_period('M').dt.start_time
+        d['month'] = _bucket_time(d['order_time'])
         # Limit to top-7 operators by total sales for readability
         top_ops = d.groupby('operator', observed=True)['sales'].sum().nlargest(7).index
         d = d[d['operator'].isin(top_ops)]
@@ -7665,7 +7671,7 @@ def server(input, output, session):
         rate, sym = currency['rate'], currency['symbol']
         top5_products = df.groupby('product', observed=True)['sales'].sum().nlargest(5).index.tolist()
         d = df[df['product'].isin(top5_products)].copy()
-        d['month'] = d['order_time'].dt.to_period('M').dt.start_time
+        d['month'] = _bucket_time(d['order_time'])
         agg = d.groupby(['month', 'product'], observed=True)['sales'].sum().mul(rate).reset_index()
         if agg.empty:
             return _no_data()
@@ -7675,7 +7681,7 @@ def server(input, output, session):
                           marker=dict(size=7, line=dict(color='white', width=1)),
                           hovertemplate='<b>%{fullData.name}</b><br>%{x|%b %Y}: ' +
                                         sym + '%{y:,.0f}<extra></extra>')
-        T.apply_theme(fig, title=_tt(f"Top 5 Products — Monthly Revenue (GMV) Trend · {currency['label']}"),
+        T.apply_theme(fig, title=_tt(f"Top 5 Products — {_period_word()} Revenue (GMV) Trend · {currency['label']}"),
                       xaxis_title=None, yaxis_title=_tt(f"Revenue ({sym})"),
                       hovermode='x unified', height=400,
                       legend=dict(orientation="h", yanchor="bottom", y=-0.22, xanchor="left", x=0))
@@ -7981,6 +7987,9 @@ def server(input, output, session):
         if d.empty:
             return None
         d['product_category'] = d['product_category'].astype(str)
+        # Group by the 6 system-wide classes (categories.py) instead of the many
+        # raw values, so the Product-tab category charts match the taxonomy.
+        d['product_class'] = d['product_category'].map(categories.classify)
         return d
 
     @render.ui
@@ -7992,7 +8001,7 @@ def server(input, output, session):
                             "select All or B2C in the Customer Segment filter.")
         currency = currency_converter()
         rate, sym = currency['rate'], currency['symbol']
-        grp = d.groupby('product_category', observed=True)
+        grp = d.groupby('product_class', observed=True)
         rev_s = grp['sales'].sum() * rate
         ord_s = grp['order_id'].nunique() if 'order_id' in d.columns else grp.size()
         total_rev = rev_s.sum()
@@ -8027,7 +8036,7 @@ def server(input, output, session):
             return _no_data("Product category data is only present in B2C rows.")
         currency = currency_converter()
         rate, sym = currency['rate'], currency['symbol']
-        grp = d.groupby('product_category', observed=True)
+        grp = d.groupby('product_class', observed=True)
         rev_s = grp['sales'].sum() * rate
         ord_s = grp['order_id'].nunique() if 'order_id' in d.columns else grp.size()
         agg = pd.DataFrame({'revenue': rev_s, 'orders': ord_s}).reset_index()
@@ -8036,7 +8045,7 @@ def server(input, output, session):
         agg['share'] = agg['revenue'] / total_rev * 100 if total_rev > 0 else 0
         fig = go.Figure()
         fig.add_trace(go.Bar(
-            x=agg['product_category'], y=agg['revenue'],
+            x=agg['product_class'], y=agg['revenue'],
             name=_tt('Revenue'), yaxis='y',
             marker=dict(color=T.PRIMARY, line=dict(color='white', width=1)),
             text=[f"{s:.1f}%" for s in agg['share']],
@@ -8044,7 +8053,7 @@ def server(input, output, session):
             hovertemplate='<b>%{x}</b><br>Revenue: ' + sym + '%{y:,.0f}<br>Share: %{text}<extra></extra>',
         ))
         fig.add_trace(go.Scatter(
-            x=agg['product_category'], y=agg['orders'],
+            x=agg['product_class'], y=agg['orders'],
             name=_tt('Orders'), yaxis='y2', mode='lines+markers',
             line=dict(color=T.WARNING, width=2.5),
             marker=dict(size=8, line=dict(color='white', width=1.5)),
@@ -8070,21 +8079,21 @@ def server(input, output, session):
         currency = currency_converter()
         rate, sym = currency['rate'], currency['symbol']
         d = d.dropna(subset=['order_time']).copy()
-        top_cats = (d.groupby('product_category', observed=True)['sales']
+        top_cats = (d.groupby('product_class', observed=True)['sales']
                       .sum().nlargest(6).index.tolist())
-        d = d[d['product_category'].isin(top_cats)]
-        d['month'] = d['order_time'].dt.to_period('M').dt.start_time
-        agg = (d.groupby(['month', 'product_category'], observed=True)['sales']
+        d = d[d['product_class'].isin(top_cats)]
+        d['bucket'] = _bucket_time(d['order_time'])
+        agg = (d.groupby(['bucket', 'product_class'], observed=True)['sales']
                  .sum().mul(rate).reset_index())
         if agg.empty:
             return _no_data()
-        fig = px.line(agg, x='month', y='sales', color='product_category',
+        fig = px.line(agg, x='bucket', y='sales', color='product_class',
                       markers=True, color_discrete_sequence=T.PALETTE)
         fig.update_traces(line=dict(width=2.5, shape='spline'),
                           marker=dict(size=7, line=dict(color='white', width=1)),
-                          hovertemplate='<b>%{fullData.name}</b><br>%{x|%b %Y}: ' +
+                          hovertemplate='<b>%{fullData.name}</b><br>%{x|%Y-%m-%d}: ' +
                                         sym + '%{y:,.0f}<extra></extra>')
-        T.apply_theme(fig, title=_tt(f"Monthly Revenue by Category (Top 6) · {currency['label']}"),
+        T.apply_theme(fig, title=_tt(f"{_period_word()} Revenue by Category (Top 6) · {currency['label']}"),
                       xaxis_title=None, yaxis_title=_tt(f"Revenue ({sym})"),
                       hovermode='x unified', height=420,
                       legend=dict(orientation="h", yanchor="bottom", y=-0.25, xanchor="left", x=0))
@@ -8652,10 +8661,16 @@ def server(input, output, session):
         if d.empty:
             return _no_data("No key-country data in the current selection.")
         d['ym'] = pd.to_datetime(d['order_time'], errors='coerce').dt.to_period('M').astype(str)
-        months = sorted([m for m in d['ym'].dropna().unique() if m and m != 'NaT'])[-3:]
+        # Anchor the 3-month window to the SELECTED date range's end month
+        # (so "Last 3 Months" quick period → Apr/May/Jun, not the latest data).
+        end_ts = pd.to_datetime(applied_date_to(), errors='coerce')
+        if pd.isna(end_ts):
+            end_ts = pd.to_datetime(d['order_time'], errors='coerce').max()
+        end_m = end_ts.to_period('M')
+        months = [str(end_m - 2), str(end_m - 1), str(end_m)]
         d = d[d['ym'].isin(months)]
         if d.empty:
-            return _no_data()
+            return _no_data("No key-country data in the selected 3-month window.")
         piv = d.groupby(['country', 'ym'], observed=True)['sales'].sum().mul(rate).reset_index()
         countries = (piv.groupby('country')['sales'].sum()
                      .sort_values(ascending=False).index.tolist())
@@ -8667,7 +8682,7 @@ def server(input, output, session):
                                   y=[float(sub.get(c, 0)) for c in countries],
                                   marker=dict(color=(pal[i % len(pal)] if pal else None))))
         fig.update_layout(barmode='group')
-        T.apply_theme(fig, title=_tt("Key Countries — Last 3 Months Revenue (重点国家)"),
+        T.apply_theme(fig, title=_tt(f"Key Countries — 3 Months to {months[-1]} (重点国家)"),
                       xaxis_title=None, yaxis_title=_tt(f"Revenue ({sym})"), height=430,
                       legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="left", x=0),
                       margin=dict(l=10, r=10, t=60, b=90))
@@ -8801,7 +8816,7 @@ def server(input, output, session):
         if b2c.empty:
             b2c = df_all
         first_order = b2c.groupby('user_id', observed=True)['order_time'].min().reset_index()
-        first_order['month'] = first_order['order_time'].dt.to_period('M').dt.start_time
+        first_order['month'] = _bucket_time(first_order['order_time'])
         monthly_new = first_order.groupby('month').size().reset_index(name=_tt('new_customers'))
         monthly_new = monthly_new.sort_values('month')
         if monthly_new.empty:
@@ -8811,7 +8826,7 @@ def server(input, output, session):
             marker=dict(color=T.PRIMARY, opacity=0.8, line=dict(color='white', width=1)),
             hovertemplate='<b>%{x|%b %Y}</b><br>New Customers: %{y:,}<extra></extra>',
         ))
-        T.apply_theme(fig, title=_tt("Monthly Customer Acquisition Rate — New Customers by First-Order Month (B2C, Full History)"),
+        T.apply_theme(fig, title=_tt(f"{_period_word()} Customer Acquisition — New Customers by First-Order Period (B2C)"),
                       xaxis_title=None, yaxis_title=_tt("New Customers"),
                       showlegend=False, margin=dict(l=10, r=10, t=50, b=10))
         return ui.HTML(T.fig_to_html(fig))
@@ -9524,7 +9539,7 @@ def server(input, output, session):
         cp = d[d['coupon_used'] == '是'].dropna(subset=['order_time']).copy()
         if cp.empty:
             return _no_data("No coupon orders in the current selection.")
-        cp['month'] = cp['order_time'].dt.to_period('M').dt.start_time
+        cp['month'] = _bucket_time(cp['order_time'])
         grp = cp.groupby('month', observed=True)
         spend_s = grp['coupon_amount'].sum() * rate if 'coupon_amount' in cp.columns else grp.size() * 0
         gmv_s   = grp['sales'].sum() * rate if 'sales' in cp.columns else grp.size() * 0
@@ -9656,7 +9671,7 @@ def server(input, output, session):
         if 'order_time' not in d.columns:
             return _no_data("Order time column not available.")
         d2 = d.dropna(subset=['order_time']).copy()
-        d2['month'] = d2['order_time'].dt.to_period('M').dt.start_time
+        d2['month'] = _bucket_time(d2['order_time'])
         promo = d2[d2['new_user_promo'] == '是']
         if promo.empty:
             return _no_data("No new-user promo orders in the current selection.")
@@ -9681,7 +9696,7 @@ def server(input, output, session):
             marker=dict(size=7, line=dict(color='white', width=1)),
             hovertemplate='<b>%{x|%b %Y}</b><br>Share: %{y:.2f}%<extra></extra>',
         ))
-        T.apply_theme(fig, title=_tt("New-User Promo Orders by Month"),
+        T.apply_theme(fig, title=_tt(f"New-User Promo Orders by {_period_word()}"),
                       xaxis_title=None, yaxis_title=_tt("Orders"),
                       yaxis2=dict(title=_tt("Share (%)"), overlaying='y', side='right',
                                   showgrid=False, ticksuffix="%"),
