@@ -11,6 +11,7 @@ import db_utils
 from country_mapping import translate_country, CN_TO_EN
 import theme as T
 import charts
+import ip_geo
 import clean_raw
 import categories
 import fx_rates
@@ -1618,6 +1619,7 @@ _GTYPE_ZH = {
 _GUIDELINE_TABS = [
     ("📊", "Overview", "总览", [
         ("🧭 Operating Summary", "🧭 运营概览", "KPI strip", "11 China-team KPIs (营业额…转化率) on the 充值成功 basis with MoM.", "11项中国团队核心指标（营业额…转化率），充值成功口径，含环比。"),
+        ("🎯 Pace to Month-End", "🎯 本月达标节奏", "Bullet gauge", "Projected month-end GMV at current daily pace vs last month / target.", "按当前日均跑数预测本月GMV，对比上月/目标。"),
         ("🚨 Anomaly Detection & Alerts", "🚨 异常检测与预警", "KPI alerts", "Auto-flags slipping/surging operators & markets (7d vs 4-wk).", "自动标记异常的运营商与市场（近7天 vs 前4周）。"),
         ("📊 Key Performance Indicators", "📊 核心绩效指标", "KPI cards", "GMV/orders/客单价/customers/markets/MoM/margin.", "营业额/订单/客单价/客户/市场/环比/毛利。"),
         ("⚡ PoP Top Movers", "⚡ 环比变动榜", "Delta cards", "Biggest revenue movers vs the prior equal period.", "与上期相比变动最大的市场与运营商。"),
@@ -1631,6 +1633,7 @@ _GUIDELINE_TABS = [
     ("🆚", "Performance Comparison", "业绩对比", [
         ("🆚 Period A vs B picker", "🆚 时段A vs B 选择", "Controls", "Choose any two windows; swap A/B.", "选择任意两个时段；A/B 互换。"),
         ("📊 KPI Variance A vs B", "📊 A vs B 指标差异", "Delta cards", "Revenue/orders/customers/客单价 side-by-side.", "营业额/订单/客户/客单价 并排对比。"),
+        ("🌉 Revenue Bridge (B→A)", "🌉 收入桥（B→A）", "Waterfall", "Decompose ΔGMV into new/lost markets + volume + price effects.", "把GMV变动拆成新增/流失市场+量效应+价效应。"),
         ("📈 Revenue Trend Overlay", "📈 收入趋势叠加", "Dual line", "Both periods aligned to day-1.", "两个时段按首日对齐对比。"),
         ("🏃 Top Movers (Market/Operator/Denomination)", "🏃 变动榜（市场/运营商/面值）", "3 tables", "Largest absolute revenue deltas.", "绝对营业额变化最大项。"),
     ]),
@@ -1661,6 +1664,7 @@ _GUIDELINE_TABS = [
         ("🤝 Operator Snapshot", "🤝 运营商快照", "KPI cards", "GMV/orders/客单价/margin/Top-3 conc.", "营业额/订单/客单价/毛利/前3集中度。"),
         ("⚠️ Supplier Concentration Risk", "⚠️ 供应商集中度风险", "KPI flag", "Top-3 operator share (🔴 if >80%).", "前3运营商占比（>80% 标红）。"),
         ("💰 Gross Margin by Operator / 📈 Margin % Trend", "💰 各运营商毛利 / 📈 毛利率趋势", "Bar & lines", "Absolute & rate margin per operator.", "各运营商毛利额与毛利率。"),
+        ("💰 Profit Pool (GMV vs Margin%)", "💰 利润池（GMV vs 毛利率）", "Bubble scatter", "Market bubbles; bottom-right = high GMV, thin margin (renegotiate).", "市场气泡；右下=高流水薄利，优先重谈。"),
         ("📋 Operator Scorecard", "📋 运营商评分卡", "Table (Excel)", "Full per-operator KPIs.", "各运营商完整指标。"),
         ("💹 Gross Margin by Product Category", "💹 各产品类别毛利", "Bar", "Which categories are most profitable.", "哪些类别最赚钱。"),
         ("🩺 Fulfillment / ⚠ Missing Supplier Order ID", "🩺 履约 / ⚠ 缺接口商订单号", "KPI + bar", "Routing coverage & reconciliation risk.", "路由覆盖率与对账风险。"),
@@ -1684,7 +1688,8 @@ _GUIDELINE_TABS = [
         ("👥 Customer KPIs (B2C)", "👥 客户核心指标 (B2C)", "KPI cards", "Active customers, 复购率, 留存率, ARPU (standard).", "活跃客户、复购率、留存率、ARPU（标准口径）。"),
         ("⚠️ Churn Risk Buckets", "⚠️ 流失风险分层", "KPI cards", "Active / at-risk / lapsed & revenue at risk.", "活跃/有风险/流失 及风险收入。"),
         ("⏱️ Registration → First Purchase Funnel", "⏱️ 注册→首购漏斗", "Funnel", "Activation speed of new customers.", "新客激活速度。"),
-        ("🌐 IP Geographic Origin (B2C)", "🌐 IP来源地分析 (B2C)", "Badge + bar", "Country–IP mismatch signal (world map removed).", "下单国与IP国错配信号（地图已移除）。"),
+        ("🌐 IP Geographic Origin (B2C)", "🌐 IP来源地分析 (B2C)", "Badge + bar", "Country–IP mismatch signal (VPN/fraud).", "下单国与IP国错配信号（VPN/欺诈）。"),
+        ("🗺️ Recharge-Failure Map by State (B2C)", "🗺️ 充值失败地图·按州省 (B2C)", "Bubble geo-map", "IP→state/province (offline DB-IP); size=failed, colour=fail%; ≥30-order floor.", "IP→州/省（离线DB-IP）；大小=失败数，颜色=失败率；≥30单门槛。"),
         ("🔄 New vs Returning (新客/老客)", "🔄 新客 vs 老客", "Donut / bar", "新客=注册月==订单月; 老客=注册月<订单月.", "新客=注册月==订单月；老客=注册月<订单月。"),
         ("🔗 Channel Performance (会员来源)", "🔗 渠道来源绩效（会员来源）", "Bar (H)", "Revenue per normalized channel (用户列表 join).", "按统一渠道（会员来源）的营业额（用户列表关联）。"),
         ("📈 Monthly Acquisition / 📊 Channel Analysis", "📈 月度获客 / 📊 渠道来源分析", "Bars", "New-customer intake & acquisition channels.", "新客获取量与获客渠道。"),
@@ -2220,9 +2225,18 @@ app_ui = ui.page_sidebar(
                 ui.output_ui("exec_summary_line"),
                 ui.div(
                     _bh3("🚀 At a Glance", "🚀 一览",
-                         _help("The five numbers that matter: GMV (+MoM), Net Contribution (+margin), "
-                               "orders, AOV, and progress vs the monthly targets (targets.csv).")),
+                         _help("The four numbers that matter: GMV (+MoM), Net Contribution (+margin), "
+                               "orders, and AOV.")),
                     ui.output_ui("exec_hero_band"),
+                    class_="chart-container"
+                ),
+                # ── Pace to month-end (are we on track this month?) ───────────
+                ui.div(
+                    _bh3("🎯 Pace to Month-End", "🎯 本月达标节奏",
+                         _help("At the current daily pace, where THIS month lands vs last month "
+                               "(or vs targets.csv if set). Anchored on the latest data month, "
+                               "ignores the date filter.")),
+                    ui.output_ui("pace_to_target_gauge"),
                     class_="chart-container"
                 ),
                 # ── Anomaly alerts: own full-width row (tall list) ────────────
@@ -2374,6 +2388,16 @@ app_ui = ui.page_sidebar(
                     _bp("Side-by-side KPI cards: Revenue (GMV), Orders, Active Customers, and AOV for each period.",
                         "并排KPI卡片：收入(GMV)、订单量、活跃客户数、AOV。"),
                     ui.output_ui("compare_kpis"),
+                    class_="chart-container"
+                ),
+                ui.div(
+                    _bh3("🌉 Revenue Bridge — what moved GMV", "🌉 收入桥 — GMV 变动归因",
+                         _help("Waterfall from Baseline (B) to Current (A): new markets, lost "
+                               "markets, volume effect (ΔOrders × prior AOV) and price effect "
+                               "(ΔAOV × current Orders). Turns 'GMV −5%' into 'why'.")),
+                    _bp("Was the change volume or price? Which markets drove it? Steps sum exactly from B to A.",
+                        "变动是量还是价？哪些市场驱动？各步精确累加，从 B 到 A。"),
+                    ui.output_ui("compare_revenue_bridge"),
                     class_="chart-container"
                 ),
                 ui.div(
@@ -3005,6 +3029,17 @@ app_ui = ui.page_sidebar(
                     class_="chart-container"
                 ),
                 ui.div(
+                    _bh3("💰 Profit Pool — where we actually make money", "💰 利润池 — 哪里真正赚钱",
+                         _help("Each bubble = a market. X = GMV, Y = Gross Margin %, bubble size = "
+                               "margin $. Bottom-right = high revenue but thin margin (renegotiate / "
+                               "reprice). Margin = 成功GMV − COGS(结算价→RMB).")),
+                    _bp("High GMV ≠ high profit. Bottom-right markets are big but thin — priority for "
+                        "supplier renegotiation or repricing.",
+                        "高流水 ≠ 高利润。右下角市场大而薄利，是供应商重谈或调价的优先目标。"),
+                    ui.output_ui("profit_pool_scatter"),
+                    class_="chart-container"
+                ),
+                ui.div(
                     _bh3("📈 Operator Revenue Trend", "📈 运营商收入趋势"),
                     _bp("Monthly revenue per operator. Identify declining (churn risk) or growing (upsell) operators.",
                         "各运营商月度收入走势，识别流失风险或增值机会。"),
@@ -3352,6 +3387,19 @@ app_ui = ui.page_sidebar(
                     _bp("Identify geographic mismatches between order origin and IP location. High mismatch rates may signal VPN or fraud activity.",
                         "识别订单来源国家与IP归属地的差异。高错配率可能表明VPN使用或潜在欺诈活动。"),
                     ui.output_ui("b2c_ip_analysis"),
+                    class_="chart-container"
+                ),
+                ui.div(
+                    _bh3("🗺️ Recharge-Failure Map by State/Province (B2C)", "🗺️ 充值失败地图 · 按州/省（B2C）",
+                         _help("Geolocates each B2C customer IP to state/province (offline DB-IP City "
+                               "Lite). Bubble size = failed orders, colour = failure rate% (已退款+已取消 "
+                               "÷ total). Only regions with ≥30 orders are shown (min-sample floor). "
+                               "Pick a Market in the sidebar to zoom in. IP→region ~indicative for "
+                               "mobile/CGNAT.")),
+                    _bp("Pinpoints WHERE recharges fail below country level — dark/large bubbles = "
+                        "problem regions to investigate (supplier/network/routing).",
+                        "把充值失败精确到州/省 —— 深色/大气泡=需排查的问题地区（供应商/网络/路由）。"),
+                    ui.output_ui("ip_failure_map"),
                     class_="chart-container"
                 ),
                 ui.div(
@@ -5279,6 +5327,68 @@ def server(input, output, session):
             style="display: flex; flex-wrap: wrap; gap: 12px;"
         )
 
+    @render.ui
+    @safe_render
+    def pace_to_target_gauge():
+        """Month-end projection: at the current daily pace, where will THIS month
+        land vs last month (and vs targets.csv if present)? Anchored on the latest
+        data month, ignores the date filter; respects segment/region/country and
+        the successful-order basis. Answers 'are we on track this month?'."""
+        base = filter_by_order_status(_apply_category_or_exclusions(data_rv().copy()),
+                                      "Successful")
+        if base is None or 'order_time' not in base.columns or base.empty:
+            return _no_data()
+        seg, reg, ctr = applied_segment(), applied_region(), applied_country()
+        if seg and seg != "All":
+            base = base[base['segment'] == seg]
+        if reg and reg != "All" and 'region' in base.columns:
+            base = base[base['region'] == reg]
+        base = _filter_by_country(base, ctr)
+        ot = pd.to_datetime(base['order_time'], errors='coerce')
+        base = base.assign(_ot=ot).dropna(subset=['_ot'])
+        if base.empty:
+            return _no_data()
+        currency = currency_converter(); rate, sym = currency['rate'], currency['symbol']
+        latest = base['_ot'].max()
+        cur_m = latest.to_period('M')
+        prev_m = (latest.replace(day=1) - pd.Timedelta(days=1)).to_period('M')
+        mtd = float(base.loc[base['_ot'].dt.to_period('M') == cur_m, 'sales'].sum() * rate)
+        prev_gmv = float(base.loc[base['_ot'].dt.to_period('M') == prev_m, 'sales'].sum() * rate)
+        days_elapsed = int(latest.day)
+        import calendar as _cal
+        days_in_month = _cal.monthrange(latest.year, latest.month)[1]
+        projected = mtd / days_elapsed * days_in_month if days_elapsed else mtd
+        # Reference: target (targets.csv, RMB) for the month if present, else last month.
+        targets = _load_targets()
+        tgt_rmb = targets.get(('revenue', str(cur_m))) or targets.get(('gmv', str(cur_m)))
+        ref = (tgt_rmb * rate) if tgt_rmb else prev_gmv
+        ref_label = "Target" if tgt_rmb else "Last month"
+        pace_pct = (projected / ref * 100) if ref else None
+        gauge_max = max(projected, ref, mtd) * 1.15 or 1
+        fig = go.Figure(go.Indicator(
+            mode="number+gauge+delta",
+            value=projected,
+            number={'prefix': sym, 'valueformat': ',.0f', 'font': {'size': 26}},
+            delta={'reference': ref, 'relative': True, 'valueformat': '.1%',
+                   'increasing': {'color': T.SUCCESS}, 'decreasing': {'color': T.DANGER}},
+            title={'text': f"{_tt('Projected month-end GMV')}<br>"
+                           f"<span style='font-size:0.75em;color:#64748B'>"
+                           f"{cur_m} · MTD {T.format_number(mtd, sym)} @ day {days_elapsed}/{days_in_month} · "
+                           f"vs {ref_label} {T.format_number(ref, sym)}</span>",
+                   'font': {'size': 14}},
+            gauge={'shape': "bullet", 'axis': {'range': [0, gauge_max]},
+                   'bar': {'color': T.PRIMARY},
+                   'steps': [{'range': [0, ref], 'color': '#EEF2FF'}],
+                   'threshold': {'line': {'color': T.WARNING, 'width': 3},
+                                 'thickness': 0.9, 'value': ref}},
+        ))
+        T.apply_theme(fig, height=170, margin=dict(l=10, r=30, t=64, b=10))
+        pace_txt = (f"On pace for <b>{pace_pct:.0f}%</b> of {ref_label.lower()}"
+                    if pace_pct is not None else "")
+        note = (f'<div style="font-size:0.82em;color:#475569;margin-top:2px;">'
+                f'{pace_txt} · {_tt("projection = MTD ÷ days elapsed × days in month")}</div>')
+        return ui.div(ui.HTML(T.fig_to_html(fig)), ui.HTML(note))
+
     # ── Overview: hero KPI band + auto executive summary (shared builders) ────
 
     def _country_movers():
@@ -6343,6 +6453,58 @@ def server(input, output, session):
 
     @render.ui
     @safe_render
+    def compare_revenue_bridge():
+        """Waterfall decomposing ΔGMV (Baseline B → Current A) into New markets,
+        Lost markets, Volume effect and AOV/price effect — exact by construction:
+        Cur = Prev + New − Lost + (ΔOrders×AOV_prev) + (ΔAOV×Orders_cur)."""
+        A, B = period_a_data(), period_b_data()   # A = current, B = baseline
+        if (A is None or B is None or A.empty or B.empty
+                or 'sales' not in A.columns or 'country' not in A.columns):
+            return _no_data()
+        currency = currency_converter(); rate, sym = currency['rate'], currency['symbol']
+        gmv_a = float(A['sales'].sum() * rate)
+        gmv_b = float(B['sales'].sum() * rate)
+        a_by = (A.groupby('country', observed=True)['sales'].sum() * rate); a_by.index = a_by.index.astype(str)
+        b_by = (B.groupby('country', observed=True)['sales'].sum() * rate); b_by.index = b_by.index.astype(str)
+        mk_a, mk_b = set(a_by.index), set(b_by.index)
+        cont = mk_a & mk_b
+        new_val  = float(a_by.reindex(list(mk_a - mk_b)).sum())
+        lost_val = float(b_by.reindex(list(mk_b - mk_a)).sum())
+
+        def _vol_price(d):
+            gmv = float(d['sales'].sum() * rate)
+            orders = int(d['order_id'].nunique()) if 'order_id' in d.columns else len(d)
+            return gmv, orders, (gmv / orders if orders else 0.0)
+        gc = A[A['country'].astype(str).isin(cont)]
+        gp = B[B['country'].astype(str).isin(cont)]
+        _, ord_c, aov_c = _vol_price(gc)
+        _, ord_p, aov_p = _vol_price(gp)
+        vol_effect   = (ord_c - ord_p) * aov_p
+        price_effect = (aov_c - aov_p) * ord_c
+
+        labels = [_tt("Baseline (B)"), _tt("New markets"), _tt("Lost markets"),
+                  _tt("Volume effect"), _tt("AOV / price effect"), _tt("Current (A)")]
+        values = [gmv_b, new_val, -lost_val, vol_effect, price_effect, gmv_a]
+        measures = ["absolute", "relative", "relative", "relative", "relative", "total"]
+        fig = go.Figure(go.Waterfall(
+            orientation="v", measure=measures, x=labels, y=values,
+            text=[T.format_number(v, sym) for v in values],
+            textposition="outside", textfont=dict(size=11),
+            connector={"line": {"color": "#CBD5E1"}},
+            increasing={"marker": {"color": T.SUCCESS}},
+            decreasing={"marker": {"color": T.DANGER}},
+            totals={"marker": {"color": T.PRIMARY}},
+            hovertemplate="%{x}: " + sym + "%{y:,.0f}<extra></extra>",
+        ))
+        chg = ((gmv_a - gmv_b) / gmv_b * 100) if gmv_b else None
+        chg_txt = f" · Δ {('+' if (chg or 0) >= 0 else '')}{chg:.1f}%" if chg is not None else ""
+        T.apply_theme(fig, title=_tt("Revenue Bridge — what moved GMV (B → A)") + chg_txt,
+                      yaxis_title=_tt(f"GMV ({sym})"), showlegend=False,
+                      margin=dict(l=10, r=10, t=60, b=10), height=420)
+        return ui.HTML(T.fig_to_html(fig))
+
+    @render.ui
+    @safe_render
     def country_month_heatmap():
         df = mi_filtered_data()
         if not {'country', 'sales', 'order_time'}.issubset(df.columns):
@@ -7088,6 +7250,56 @@ def server(input, output, session):
                       xaxis_title=_tt(f"Sales ({currency['symbol']})"), yaxis_title=None,
                       margin=dict(l=10, r=80, t=50, b=10), height=520,
                       legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="left", x=0))
+        return ui.HTML(T.fig_to_html(fig))
+
+    @render.ui
+    @safe_render
+    def profit_pool_scatter():
+        """Profit-pool quadrant: GMV (x) vs Gross Margin % (y) per market, bubble =
+        margin $. Instantly shows where we make money vs high-revenue/thin-margin
+        markets (bottom-right). Margin = 成功GMV − COGS(结算价→RMB)."""
+        d = filter_by_order_status(filtered_base_calc(), "Successful")
+        scol = _settle_col(d) if d is not None else None
+        if (d is None or d.empty or 'country' not in d.columns or 'sales' not in d.columns
+                or not scol or scol not in d.columns):
+            return _no_data()
+        currency = currency_converter(); rate, sym = currency['rate'], currency['symbol']
+        d = d.copy()
+        d['_sales'] = pd.to_numeric(d['sales'], errors='coerce')
+        d['_cogs'] = pd.to_numeric(d[scol], errors='coerce')
+        g = (d.groupby('country', observed=True)
+               .agg(gmv=('_sales', 'sum'), cogs=('_cogs', 'sum'),
+                    orders=('order_id', 'nunique') if 'order_id' in d.columns else ('_sales', 'size'))
+               .reset_index())
+        g['gmv'] = g['gmv'] * rate
+        g['cogs'] = g['cogs'] * rate
+        g['margin'] = g['gmv'] - g['cogs']
+        g['margin_pct'] = g['margin'] / g['gmv'].replace(0, np.nan) * 100
+        g = g[(g['gmv'] > 0)].dropna(subset=['margin_pct'])
+        if g.empty:
+            return _no_data()
+        g = g.nlargest(25, 'gmv')
+        med_gmv, med_mpct = g['gmv'].median(), g['margin_pct'].median()
+        size = g['margin'].abs()
+        sizeref = (2.0 * size.max() / (42 ** 2)) if size.max() > 0 else 1
+        fig = go.Figure(go.Scatter(
+            x=g['gmv'], y=g['margin_pct'], mode='markers+text',
+            marker=dict(size=size, sizemode='area', sizeref=sizeref, sizemin=4,
+                        color=g['margin_pct'], colorscale=T.SCALE_SEQUENTIAL, showscale=True,
+                        colorbar=dict(title=_tt('Margin %')), line=dict(color='white', width=1)),
+            text=g['country'], textposition='top center', textfont=dict(size=9, color="#334155"),
+            customdata=np.stack([g['margin'], g['orders']], axis=-1),
+            hovertemplate='<b>%{text}</b><br>GMV: ' + sym + '%{x:,.0f}<br>'
+                          'Margin: ' + sym + '%{customdata[0]:,.0f} (%{y:.1f}%)<br>'
+                          'Orders: %{customdata[1]:,}<extra></extra>',
+        ))
+        fig.add_hline(y=med_mpct, line=dict(color='#94A3B8', dash='dot'))
+        fig.add_vline(x=med_gmv, line=dict(color='#94A3B8', dash='dot'))
+        fig.add_annotation(x=g['gmv'].max(), y=g['margin_pct'].min(), text=_tt("⚠ high GMV · thin margin"),
+                           showarrow=False, font=dict(size=10, color=T.DANGER), xanchor='right', yanchor='bottom')
+        T.apply_theme(fig, title=_tt("Profit Pool — GMV vs Margin % by Market (bubble = margin $)"),
+                      xaxis_title=_tt(f"GMV ({sym})"), yaxis_title=_tt("Gross Margin %"),
+                      height=480, margin=dict(l=10, r=10, t=60, b=10))
         return ui.HTML(T.fig_to_html(fig))
 
     @render.ui
@@ -9340,6 +9552,74 @@ def server(input, output, session):
                       xaxis_title=_tt("Number of Customers"), yaxis_title=None,
                       margin=dict(l=10, r=160, t=50, b=10), height=320,
                       yaxis=dict(autorange='reversed'))
+        return ui.HTML(T.fig_to_html(fig))
+
+    # ── B2C recharge-failure map by state/province (offline IP geolocation) ────
+    _IP_MAP_MIN = 30   # min orders per region — small-sample floor for a stable rate
+
+    @render.ui
+    @safe_render
+    def ip_failure_map():
+        if not ip_geo.available():
+            return ui.HTML(
+                '<div style="color:#64748B;padding:20px;line-height:1.6;">'
+                '📍 <b>IP-geo database not installed.</b> Drop '
+                '<code>dbip-city-lite.mmdb</code> into <code>database/</code> to enable the '
+                'sub-national failure map.<br>Free, no account: '
+                '<code>download.db-ip.com/free/dbip-city-lite-YYYY-MM.mmdb.gz</code> → gunzip.</div>')
+        d = filtered_base_calc()   # all statuses (need total & failed); excludes e-wallet/TNG by default
+        if d is None or d.empty or 'ip_address' not in d.columns or 'order_status' not in d.columns:
+            return _no_data()
+        d = d[d.get('segment').astype(str) == 'B2C'] if 'segment' in d.columns else d
+        if d.empty:
+            return ui.HTML('<div style="color:#64748B;padding:20px;">No B2C rows in the current '
+                           'selection (this map is B2C-only — check the Segment filter).</div>')
+        d = d.copy()
+        d['ip_address'] = d['ip_address'].astype(str)
+        uniq = pd.Series(d['ip_address'].unique())
+        gmap = {}
+        for ip in uniq:
+            g = ip_geo.lookup(ip)
+            if g and g.get('subdivision') and g.get('lat') is not None:
+                gmap[ip] = (g['iso2'], g['subdivision'], g['lat'], g['lon'])
+        d = d[d['ip_address'].isin(gmap)]
+        if d.empty:
+            return _no_data()
+        d['_iso2'] = d['ip_address'].map(lambda x: gmap[x][0])
+        d['_sub']  = d['ip_address'].map(lambda x: gmap[x][1])
+        d['_lat']  = d['ip_address'].map(lambda x: gmap[x][2])
+        d['_lon']  = d['ip_address'].map(lambda x: gmap[x][3])
+        d['_failed'] = d['order_status'].astype(str).isin(['已退款', '已取消'])
+        oid = 'order_id' if 'order_id' in d.columns else None
+        agg = d.groupby(['_iso2', '_sub'], observed=True).agg(
+            total=(oid, 'nunique') if oid else ('_failed', 'size'),
+            failed=('_failed', 'sum'),
+            lat=('_lat', 'mean'), lon=('_lon', 'mean')).reset_index()
+        agg = agg[agg['total'] >= _IP_MAP_MIN]
+        if agg.empty:
+            return ui.HTML(f'<div style="color:#64748B;padding:20px;">No region reaches the '
+                           f'{_IP_MAP_MIN}-order min-sample floor in the current selection.</div>')
+        agg['rate'] = agg['failed'] / agg['total'] * 100
+        smax = float(agg['failed'].max()) or 1.0
+        sizeref = 2.0 * smax / (44 ** 2)
+        fig = go.Figure(go.Scattergeo(
+            lon=agg['lon'], lat=agg['lat'], text=agg['_sub'], mode='markers',
+            marker=dict(size=agg['failed'].clip(lower=0.1), sizemode='area', sizeref=sizeref, sizemin=3,
+                        color=agg['rate'], colorscale=T.SCALE_SEQUENTIAL, cmin=0, showscale=True,
+                        colorbar=dict(title=dict(text=_tt('Fail %'), font=dict(size=11)), thickness=12, len=0.7),
+                        line=dict(color='white', width=0.5), opacity=0.85),
+            customdata=np.stack([agg['failed'], agg['total'], agg['rate']], axis=-1),
+            hovertemplate='<b>%{text}</b><br>' + _tt('Failed') + ': %{customdata[0]:,} / %{customdata[1]:,}'
+                          '<br>' + _tt('Fail rate') + ': %{customdata[2]:.1f}%<extra></extra>',
+        ))
+        geo_kw = dict(showframe=False, showcoastlines=False, projection_type='natural earth',
+                      bgcolor='rgba(0,0,0,0)', landcolor='#F1F5F9', showcountries=True,
+                      countrycolor='#E2E8F0', showsubunits=True, subunitcolor='#CBD5E1')
+        ctr = applied_country()
+        if (ctr and ctr != 'All') or agg['_iso2'].nunique() == 1:
+            geo_kw['fitbounds'] = 'locations'
+        T.apply_theme(fig, title=_tt("Recharge failures by state/province · B2C (bubble = failed orders, colour = fail %)"),
+                      height=540, margin=dict(l=0, r=0, t=50, b=0), geo=geo_kw)
         return ui.HTML(T.fig_to_html(fig))
 
     # ── B2C IP Geographic Origin Analysis ─────────────────────────────────────

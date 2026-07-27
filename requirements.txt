@@ -11,3 +11,7 @@ scikit-learn==1.9.0
 reportlab==4.5.1
 XlsxWriter==3.2.9
 openpyxl==3.1.5
+# Offline IP → state/province geolocation for the B2C recharge-failure map.
+# Also needs database/dbip-city-lite.mmdb (free, no account):
+#   download.db-ip.com/free/dbip-city-lite-YYYY-MM.mmdb.gz → gunzip. gitignored.
+maxminddb==3.1.1
