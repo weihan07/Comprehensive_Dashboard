@@ -5,6 +5,7 @@ import plotly.graph_objects as go
 from shiny import App, ui, reactive, render
 import json
 import re as _re
+import asyncio
 from pathlib import Path
 
 import db_utils
@@ -1646,7 +1647,7 @@ _GUIDELINE_TABS = [
         ("⚠ Refund Rate by Operator (Top 10)", "⚠ 各运营商退款率（前10）", "Bar (H)", "Operators with worst refund rates (≥200).", "退款率最高的运营商（≥200单）。"),
     ]),
     ("🌍", "Market Intelligence", "市场洞察", [
-        ("🗺️ Global Revenue Distribution", "🗺️ 全球收入分布", "Choropleth map", "Revenue intensity by country worldwide.", "全球各国营业额强度。"),
+        ("🗺️ Revenue by Market + User IP Location", "🗺️ 各市场营业额 + 用户IP分布", "Choropleth + bubbles", "Shading=revenue by market; bubbles=B2C users by IP state/province (size=orders, colour=fail%).", "色块=各市场营业额；气泡=B2C用户IP州省分布（大小=订单，颜色=失败率）。"),
         ("🌍 Top Markets by Revenue", "🌍 市场收入排名", "Bar (H)", "Top-15 by GMV (orders/AOV in the scorecard).", "按营业额前15（订单/客单价见评分卡）。"),
         ("💎 Market Opportunity Matrix", "💎 市场机会矩阵", "Bubble scatter", "Volume × 客单价 × GMV — where to invest.", "订单量 × 客单价 × 营业额 — 投资方向。"),
         ("📅 Monthly Revenue Heatmap (Top 15)", "📅 月度收入热力图（前15）", "Heatmap", "Seasonality & momentum per market.", "各市场季节性与势头。"),
@@ -1689,7 +1690,8 @@ _GUIDELINE_TABS = [
         ("⚠️ Churn Risk Buckets", "⚠️ 流失风险分层", "KPI cards", "Active / at-risk / lapsed & revenue at risk.", "活跃/有风险/流失 及风险收入。"),
         ("⏱️ Registration → First Purchase Funnel", "⏱️ 注册→首购漏斗", "Funnel", "Activation speed of new customers.", "新客激活速度。"),
         ("🌐 IP Geographic Origin (B2C)", "🌐 IP来源地分析 (B2C)", "Badge + bar", "Country–IP mismatch signal (VPN/fraud).", "下单国与IP国错配信号（VPN/欺诈）。"),
-        ("🗺️ Recharge-Failure Map by State (B2C)", "🗺️ 充值失败地图·按州省 (B2C)", "Bubble geo-map", "IP→state/province (offline DB-IP); size=failed, colour=fail%; ≥30-order floor.", "IP→州/省（离线DB-IP）；大小=失败数，颜色=失败率；≥30单门槛。"),
+        ("🗺️ Recharge-Failure Map by State (B2C)", "🗺️ 充值失败地图·按州省 (B2C)", "Bubble geo-map", "IP→state/province; size=failed, colour=fail%; ≥30-order floor; filter by category/operator.", "IP→州/省；大小=失败数，颜色=失败率；≥30单门槛；可按分类/运营商筛选。"),
+        ("📋 Highest-Failure Regions (B2C)", "📋 失败率最高地区 (B2C)", "Ranked table", "Worst regions by fail% + top-failing product & operator in each.", "按失败率排序的地区+各地区主要失败产品与运营商。"),
         ("🔄 New vs Returning (新客/老客)", "🔄 新客 vs 老客", "Donut / bar", "新客=注册月==订单月; 老客=注册月<订单月.", "新客=注册月==订单月；老客=注册月<订单月。"),
         ("🔗 Channel Performance (会员来源)", "🔗 渠道来源绩效（会员来源）", "Bar (H)", "Revenue per normalized channel (用户列表 join).", "按统一渠道（会员来源）的营业额（用户列表关联）。"),
         ("📈 Monthly Acquisition / 📊 Channel Analysis", "📈 月度获客 / 📊 渠道来源分析", "Bars", "New-customer intake & acquisition channels.", "新客获取量与获客渠道。"),
@@ -2529,8 +2531,15 @@ app_ui = ui.page_sidebar(
                     class_="chart-container"
                 ),
                 ui.div(
-                    _bh3("🗺️ Global Revenue Distribution (World Map)", "🗺️ 全球收入分布（世界地图）",
-                         _help("Choropleth map shaded by total revenue (GMV).")),
+                    _bh3("🗺️ Revenue by Market + User IP Location (World Map)", "🗺️ 各市场营业额 + 用户IP分布（世界地图）",
+                         _help("Two layers: country shading = revenue (GMV) by order market; red "
+                               "bubbles = B2C customers geolocated to state/province by IP, sized by "
+                               "order volume, coloured by failure rate. Reveals cross-border top-ups "
+                               "(revenue lands in one market, users are elsewhere). Needs the offline "
+                               "IP-geo DB for the bubbles.")),
+                    _bp("Shading = where the money is booked; bubbles = where the customers actually "
+                        "are (by IP). Big red bubbles = large user clusters with high failure.",
+                        "色块=营业额落在哪个市场；气泡=用户实际所在地（按IP）。大红气泡=用户多且失败率高的地区。"),
                     ui.output_ui("country_world_map"),
                     class_="chart-container"
                 ),
@@ -3394,13 +3403,38 @@ app_ui = ui.page_sidebar(
                          _help("Geolocates each B2C customer IP to state/province (offline DB-IP City "
                                "Lite). Bubble size = failed orders, colour = failure rate% (已退款+已取消 "
                                "÷ total). Only regions with ≥30 orders are shown (min-sample floor). "
-                               "Pick a Market in the sidebar to zoom in. IP→region ~indicative for "
-                               "mobile/CGNAT.")),
-                    _bp("Pinpoints WHERE recharges fail below country level — dark/large bubbles = "
-                        "problem regions to investigate (supplier/network/routing).",
-                        "把充值失败精确到州/省 —— 深色/大气泡=需排查的问题地区（供应商/网络/路由）。"),
+                               "Use the Category / Operator selectors to drill; pick a Market in the "
+                               "sidebar to zoom in. IP→region ~indicative for mobile/CGNAT.")),
+                    _bp("Pinpoints WHERE recharges fail below country level, and the ranked table shows "
+                        "the worst regions + what's failing there. Filter by product category / operator "
+                        "for precise analysis.",
+                        "把充值失败精确到州/省；下方排行榜列出最差地区及其主要失败产品/运营商。可按商品分类/运营商筛选精准分析。"),
+                    ui.div(
+                        ui.div(
+                            _bl("Product Category", "商品分类"),
+                            ui.input_select(
+                                "ip_fail_category", None,
+                                choices={"All": "All · 全部",
+                                         **{t: f"{categories.label(t, 'en')} · {t}"
+                                            for t in categories.TOP_CATEGORIES}},
+                                selected="All"),
+                            style="flex:1 1 220px; min-width:200px;"),
+                        ui.div(
+                            _bl("Operator", "运营商"),
+                            ui.output_ui("ip_fail_operator_ui"),
+                            style="flex:1 1 280px; min-width:240px;"),
+                        style="display:flex; gap:14px; flex-wrap:wrap; align-items:flex-start; margin-bottom:10px;"
+                    ),
                     ui.output_ui("ip_failure_map"),
                     class_="chart-container"
+                ),
+                ui.div(
+                    _bh3("📋 Highest-Failure Regions (B2C)", "📋 失败率最高地区（B2C）",
+                         _help("Top regions by failure rate (≥30 orders) with the most common failing "
+                               "product and operator in each — the 'where + why'. Follows the Category / "
+                               "Operator selectors above.")),
+                    ui.output_data_frame("ip_failure_ranking"),
+                    class_="data-table"
                 ),
                 ui.div(
                     _bh3("📈 Monthly Customer Acquisition Rate (B2C)", "📈 每月新客户获取量（B2C）",
@@ -4232,14 +4266,19 @@ def server(input, output, session):
     # ------------------------------------------------------------------
     @reactive.Effect
     @reactive.event(input.clean_import_btn)
-    def handle_clean_import():
+    async def handle_clean_import():
         """Clean & import new daily raw files from the Data/ folders (clean_raw.py)."""
         import_message_rv.set("⏳ Scanning Data/ folders, cleaning new daily files, and appending…")
         try:
-            res = clean_raw.import_new_daily(dry_run=False)
+            # Off the event loop so the UI stays live (see handle_reload_source).
+            res, new_data = await asyncio.to_thread(
+                lambda: (clean_raw.import_new_daily(dry_run=False), load_data()))
         except Exception as exc:
             import_message_rv.set(f"❌ Clean & Import failed: {exc}")
             return
+        data_rv.set(new_data)
+        _refresh_filter_choices(new_data)
+        import_summary_rv.set(db_utils.import_status())
         files = res.get("files", [])
         cleaned = [f for f in files if "skipped" not in f and "error" not in f]
         skipped = sum(1 for f in files if f.get("skipped"))
@@ -4260,26 +4299,22 @@ def server(input, output, session):
 
     @reactive.Effect
     @reactive.event(input.full_rebuild_btn)
-    def handle_full_rebuild():
+    async def handle_full_rebuild():
         """Full rebuild from Data/ raw (history xlsx all sheets + every daily CSV)."""
         import_message_rv.set(
             "⏳ Full rebuild from Data/ — reading history workbooks (all sheets) + daily CSVs, "
             "cleaning, and rebuilding stores + cache. This reads the big xlsx once and can take "
             "several minutes…")
         try:
-            res = clean_raw.full_rebuild_from_data(dry_run=False)
+            # Off the event loop so the UI stays live (see handle_reload_source).
+            res, new_data = await asyncio.to_thread(
+                lambda: (clean_raw.full_rebuild_from_data(dry_run=False), load_data()))
         except Exception as exc:
             import_message_rv.set(f"❌ Full rebuild failed: {exc}")
             return
-        # Auto-reload the freshly-rebuilt data into the live dashboard.
-        try:
-            new_data = load_data()
-            data_rv.set(new_data)
-            _refresh_filter_choices(new_data)
-            import_summary_rv.set(db_utils.import_status())
-        except Exception as exc:
-            import_message_rv.set(f"⚠ Rebuild done but auto-reload failed: {exc}")
-            return
+        data_rv.set(new_data)
+        _refresh_filter_choices(new_data)
+        import_summary_rv.set(db_utils.import_status())
         m, a = res.get("master", {}), res.get("agent", {})
         lines = ["✅ Full rebuild from Data/ done — database now sourced entirely from Data/ raw.",
                  f"• B2C (Master+RM): {m.get('rows', 0):,} rows · {m.get('date_min','?')} → {m.get('date_max','?')}",
@@ -4369,7 +4404,7 @@ def server(input, output, session):
     # ------------------------------------------------------------------
     @reactive.Effect
     @reactive.event(input.reload_source_btn, ignore_init=True)
-    def handle_reload_source():
+    async def handle_reload_source():
         progress_lines = []
 
         def _say(msg):
@@ -4384,10 +4419,17 @@ def server(input, output, session):
                 "The dashboard will refresh automatically when done."
             )
             t0 = _dt.datetime.now()
-            result = db_utils.rebuild_from_source(progress_callback=_say)
 
-            # Re-load the data into the live dashboard
-            new_data = load_data()
+            # Run the heavy rebuild + reload OFF the event loop so Shiny stays
+            # responsive (WebSocket alive) — otherwise a multi-minute blocking
+            # call disconnects the browser and the final update never renders,
+            # forcing a manual F5. asyncio.to_thread keeps the UI live and the
+            # dashboard refreshes automatically the moment it finishes.
+            def _work():
+                res = db_utils.rebuild_from_source(progress_callback=_say)
+                return res, load_data()
+            result, new_data = await asyncio.to_thread(_work)
+
             data_rv.set(new_data)
             _refresh_filter_choices(new_data)
             import_summary_rv.set(db_utils.import_status())
@@ -6549,30 +6591,65 @@ def server(input, output, session):
     @render.ui
     @safe_render
     def country_world_map():
-        """Choropleth of total sales by country for the selected period."""
+        """Dual layer: revenue by market (choropleth) + B2C user IP location
+        (state/province bubbles, colour = failure rate). Shows where revenue
+        lands vs where customers physically are (cross-border top-ups)."""
         df = mi_filtered_data()
         if 'country' not in df.columns or 'sales' not in df.columns:
             return _no_data()
-        currency = currency_converter()
+        currency = currency_converter(); sym = currency['symbol']
+        fig = go.Figure()
+
+        # Layer 1 — revenue choropleth by order country (all segments)
         cs = df.groupby('country', observed=True)['sales'].sum().mul(currency['rate']).reset_index()
         cs['iso3'] = cs['country'].map(T.to_iso3)
         cs = cs.dropna(subset=['iso3'])
-        if cs.empty:
-            return ui.HTML('<div style="color:#64748B;padding:20px;">No mappable countries in current selection.</div>')
-        fig = go.Figure(go.Choropleth(
-            locations=cs['iso3'], z=cs['sales'], locationmode='ISO-3',
-            text=cs['country'],
-            colorscale=T.SCALE_SEQUENTIAL,
-            colorbar=dict(title=dict(text=f"Sales ({currency['symbol']})", font=dict(size=11)),
-                          thickness=12, len=0.7),
-            hovertemplate='<b>%{text}</b><br>Sales: ' + currency['symbol'] + '%{z:,.0f}<extra></extra>',
-            marker_line_color='white', marker_line_width=0.5,
-        ))
-        T.apply_theme(fig, title=_tt(f"Sales by country · world map ({currency['label']})"),
-                      margin=dict(l=0, r=0, t=50, b=0), height=520,
+        if not cs.empty:
+            fig.add_trace(go.Choropleth(
+                locations=cs['iso3'], z=cs['sales'], locationmode='ISO-3', text=cs['country'],
+                colorscale=T.SCALE_SEQUENTIAL,
+                colorbar=dict(title=dict(text=f"Rev ({sym})", font=dict(size=10)),
+                              thickness=11, len=0.42, y=0.77, yanchor='middle', x=1.01),
+                hovertemplate='<b>%{text}</b><br>Revenue: ' + sym + '%{z:,.0f}<extra></extra>',
+                marker_line_color='white', marker_line_width=0.5,
+            ))
+
+        # Layer 2 — B2C user bubbles by IP subdivision (size = orders, colour = fail %)
+        if ip_geo.available():
+            base = _scope_sidebar(data_rv())
+            compare = list(input.mi_compare_countries() or [])
+            if compare and base is not None and 'country' in base.columns:
+                base = base[base['country'].astype(str).isin(compare)]
+            rf = _ip_region_frame(base)
+            if rf is not None and not rf.empty:
+                agg = _ip_region_stats(rf, currency['rate'], min_orders=10)
+                if not agg.empty:
+                    smax = float(agg['orders'].max()) or 1.0
+                    sizeref = 2.0 * smax / (38 ** 2)
+                    fig.add_trace(go.Scattergeo(
+                        lon=agg['lon'], lat=agg['lat'], text=agg['_sub'], mode='markers',
+                        marker=dict(size=agg['orders'].clip(lower=0.1), sizemode='area',
+                                    sizeref=sizeref, sizemin=3,
+                                    color=agg['fail_rate'], colorscale='Reds', cmin=0,
+                                    colorbar=dict(title=dict(text=_tt('Fail %'), font=dict(size=10)),
+                                                  thickness=11, len=0.42, y=0.25, yanchor='middle', x=1.01),
+                                    line=dict(color='white', width=0.6), opacity=0.78),
+                        customdata=np.stack([agg['orders'], agg['success_rate'], agg['fail_rate'],
+                                             agg['revenue']], axis=-1),
+                        hovertemplate='<b>%{text}</b> · ' + _tt('users') + '<br>'
+                                      + _tt('Orders') + ': %{customdata[0]:,}<br>'
+                                      + _tt('Success') + ': %{customdata[1]:.1f}%<br>'
+                                      + _tt('Fail') + ': %{customdata[2]:.1f}%<br>'
+                                      + _tt('Revenue') + ': ' + sym + '%{customdata[3]:,.0f}<extra></extra>',
+                    ))
+
+        if not fig.data:
+            return ui.HTML('<div style="color:#64748B;padding:20px;">No mappable data in current selection.</div>')
+        title = _tt(f"Revenue by market + B2C user IP location · world map ({currency['label']})")
+        T.apply_theme(fig, title=title, margin=dict(l=0, r=0, t=50, b=0), height=540, showlegend=False,
                       geo=dict(showframe=False, showcoastlines=False, projection_type='natural earth',
                                bgcolor='rgba(0,0,0,0)', landcolor='#F1F5F9', showcountries=True,
-                               countrycolor='#E2E8F0'))
+                               countrycolor='#E2E8F0', showsubunits=True, subunitcolor='#E2E8F0'))
         return ui.HTML(T.fig_to_html(fig))
 
     @render.ui
@@ -9554,61 +9631,144 @@ def server(input, output, session):
                       yaxis=dict(autorange='reversed'))
         return ui.HTML(T.fig_to_html(fig))
 
-    # ── B2C recharge-failure map by state/province (offline IP geolocation) ────
+    # ── B2C IP-geolocation maps (shared helpers) ──────────────────────────────
     _IP_MAP_MIN = 30   # min orders per region — small-sample floor for a stable rate
+
+    def _ip_region_frame(df):
+        """Attach _iso2/_sub/_lat/_lon/_failed/_success to B2C rows via the offline
+        IP geo DB. Returns None if ip_geo is unavailable or nothing resolves."""
+        if not ip_geo.available() or df is None or getattr(df, 'empty', True):
+            return None
+        if 'ip_address' not in df.columns or 'order_status' not in df.columns:
+            return None
+        d = df[df['segment'].astype(str) == 'B2C'] if 'segment' in df.columns else df
+        if d.empty:
+            return None
+        d = d.copy()
+        d['ip_address'] = d['ip_address'].astype(str)
+        gmap = {}
+        for ip in d['ip_address'].unique():
+            g = ip_geo.lookup(ip)
+            if g and g.get('subdivision') and g.get('lat') is not None:
+                gmap[ip] = (g['iso2'], g['subdivision'], g['lat'], g['lon'])
+        if not gmap:
+            return None
+        d = d[d['ip_address'].isin(gmap)]
+        if d.empty:
+            return None
+        d['_iso2'] = d['ip_address'].map(lambda x: gmap[x][0])
+        d['_sub']  = d['ip_address'].map(lambda x: gmap[x][1])
+        d['_lat']  = d['ip_address'].map(lambda x: gmap[x][2])
+        d['_lon']  = d['ip_address'].map(lambda x: gmap[x][3])
+        st = d['order_status'].astype(str)
+        d['_failed']  = st.isin(['已退款', '已取消'])
+        d['_success'] = st == '充值成功'
+        return d
+
+    def _ip_region_stats(d, rate, min_orders=0):
+        """Per-(iso2, subdivision) stats from an _ip_region_frame output."""
+        oid = 'order_id' if 'order_id' in d.columns else None
+        agg = d.groupby(['_iso2', '_sub'], observed=True).agg(
+            orders=(oid, 'nunique') if oid else ('_failed', 'size'),
+            failed=('_failed', 'sum'), success=('_success', 'sum'),
+            revenue=('sales', 'sum') if 'sales' in d.columns else ('_failed', 'size'),
+            lat=('_lat', 'mean'), lon=('_lon', 'mean')).reset_index()
+        if 'sales' in d.columns:
+            agg['revenue'] = agg['revenue'] * rate
+        agg = agg[agg['orders'] >= min_orders].copy()
+        agg['fail_rate'] = agg['failed'] / agg['orders'].replace(0, np.nan) * 100
+        agg['success_rate'] = agg['success'] / agg['orders'].replace(0, np.nan) * 100
+        return agg
+
+    def _scope_sidebar(d):
+        """Apply the sidebar segment/region/country/date filters WITHOUT the
+        China-team e-wallet/TNG exclusion — so the maps can analyse every product
+        category (the in-map Category selector is the sole category authority)."""
+        if d is None or getattr(d, 'empty', True):
+            return d
+        d = d.copy()
+        seg, reg, ctr = applied_segment(), applied_region(), applied_country()
+        if seg and seg != "All":
+            d = d[d['segment'] == seg]
+        if reg and reg != "All" and 'region' in d.columns:
+            d = d[d['region'] == reg]
+        d = _filter_by_country(d, ctr)
+        dfrom, dto = applied_date_from(), applied_date_to()
+        if dfrom and dto and 'order_time' in d.columns:
+            s = pd.to_datetime(dfrom, errors='coerce'); e = pd.to_datetime(dto, errors='coerce')
+            if pd.notna(s) and pd.notna(e):
+                if s > e:
+                    s, e = e, s
+                d = d[(d['order_time'].dt.date >= s.date()) & (d['order_time'].dt.date <= e.date())]
+        return d
+
+    @render.ui
+    @safe_render
+    def ip_fail_operator_ui():
+        """Operator multi-select scoping the B2C failure map + ranking."""
+        d = _scope_sidebar(data_rv())
+        ops = []
+        if d is not None and not d.empty and 'operator' in d.columns:
+            if 'segment' in d.columns:
+                d = d[d['segment'].astype(str) == 'B2C']
+            ops = (d['operator'].astype(str).replace({'': None, 'nan': None}).dropna()
+                     .value_counts().head(60).index.tolist())
+        return ui.input_selectize("ip_fail_operator", None, choices=ops, multiple=True,
+                                  options={"placeholder": "All operators — type to filter…"})
+
+    @reactive.Calc
+    def ip_fail_base():
+        """B2C, all-status, scoped by the in-map Category + Operator selectors →
+        _ip_region_frame. Shared by the failure map and the ranking table."""
+        d = _scope_sidebar(data_rv())
+        if d is None or d.empty:
+            return None
+        try:
+            cat = input.ip_fail_category() or "All"
+        except Exception:
+            cat = "All"
+        if cat and cat != "All" and 'product_category' in d.columns:
+            keep = categories.raw_values(cat)
+            d = d[d['product_category'].astype(str).str.strip().isin(keep)]
+        try:
+            ops = list(input.ip_fail_operator() or [])
+        except Exception:
+            ops = []
+        if ops and 'operator' in d.columns:
+            d = d[d['operator'].astype(str).isin(ops)]
+        return _ip_region_frame(d)
+
+    def _ip_db_missing():
+        return ui.HTML(
+            '<div style="color:#64748B;padding:20px;line-height:1.6;">'
+            '📍 <b>IP-geo database not installed.</b> Drop '
+            '<code>dbip-city-lite.mmdb</code> into <code>database/</code> to enable the '
+            'sub-national failure map.<br>Free, no account: '
+            '<code>download.db-ip.com/free/dbip-city-lite-YYYY-MM.mmdb.gz</code> → gunzip.</div>')
 
     @render.ui
     @safe_render
     def ip_failure_map():
         if not ip_geo.available():
-            return ui.HTML(
-                '<div style="color:#64748B;padding:20px;line-height:1.6;">'
-                '📍 <b>IP-geo database not installed.</b> Drop '
-                '<code>dbip-city-lite.mmdb</code> into <code>database/</code> to enable the '
-                'sub-national failure map.<br>Free, no account: '
-                '<code>download.db-ip.com/free/dbip-city-lite-YYYY-MM.mmdb.gz</code> → gunzip.</div>')
-        d = filtered_base_calc()   # all statuses (need total & failed); excludes e-wallet/TNG by default
-        if d is None or d.empty or 'ip_address' not in d.columns or 'order_status' not in d.columns:
-            return _no_data()
-        d = d[d.get('segment').astype(str) == 'B2C'] if 'segment' in d.columns else d
-        if d.empty:
-            return ui.HTML('<div style="color:#64748B;padding:20px;">No B2C rows in the current '
-                           'selection (this map is B2C-only — check the Segment filter).</div>')
-        d = d.copy()
-        d['ip_address'] = d['ip_address'].astype(str)
-        uniq = pd.Series(d['ip_address'].unique())
-        gmap = {}
-        for ip in uniq:
-            g = ip_geo.lookup(ip)
-            if g and g.get('subdivision') and g.get('lat') is not None:
-                gmap[ip] = (g['iso2'], g['subdivision'], g['lat'], g['lon'])
-        d = d[d['ip_address'].isin(gmap)]
-        if d.empty:
-            return _no_data()
-        d['_iso2'] = d['ip_address'].map(lambda x: gmap[x][0])
-        d['_sub']  = d['ip_address'].map(lambda x: gmap[x][1])
-        d['_lat']  = d['ip_address'].map(lambda x: gmap[x][2])
-        d['_lon']  = d['ip_address'].map(lambda x: gmap[x][3])
-        d['_failed'] = d['order_status'].astype(str).isin(['已退款', '已取消'])
-        oid = 'order_id' if 'order_id' in d.columns else None
-        agg = d.groupby(['_iso2', '_sub'], observed=True).agg(
-            total=(oid, 'nunique') if oid else ('_failed', 'size'),
-            failed=('_failed', 'sum'),
-            lat=('_lat', 'mean'), lon=('_lon', 'mean')).reset_index()
-        agg = agg[agg['total'] >= _IP_MAP_MIN]
+            return _ip_db_missing()
+        d = ip_fail_base()
+        if d is None or d.empty:
+            return ui.HTML('<div style="color:#64748B;padding:20px;">No resolvable B2C rows for the '
+                           'current filters (this map is B2C-only).</div>')
+        currency = currency_converter(); sym = currency['symbol']
+        agg = _ip_region_stats(d, currency['rate'], _IP_MAP_MIN)
         if agg.empty:
             return ui.HTML(f'<div style="color:#64748B;padding:20px;">No region reaches the '
                            f'{_IP_MAP_MIN}-order min-sample floor in the current selection.</div>')
-        agg['rate'] = agg['failed'] / agg['total'] * 100
         smax = float(agg['failed'].max()) or 1.0
         sizeref = 2.0 * smax / (44 ** 2)
         fig = go.Figure(go.Scattergeo(
             lon=agg['lon'], lat=agg['lat'], text=agg['_sub'], mode='markers',
             marker=dict(size=agg['failed'].clip(lower=0.1), sizemode='area', sizeref=sizeref, sizemin=3,
-                        color=agg['rate'], colorscale=T.SCALE_SEQUENTIAL, cmin=0, showscale=True,
+                        color=agg['fail_rate'], colorscale=T.SCALE_SEQUENTIAL, cmin=0, showscale=True,
                         colorbar=dict(title=dict(text=_tt('Fail %'), font=dict(size=11)), thickness=12, len=0.7),
                         line=dict(color='white', width=0.5), opacity=0.85),
-            customdata=np.stack([agg['failed'], agg['total'], agg['rate']], axis=-1),
+            customdata=np.stack([agg['failed'], agg['orders'], agg['fail_rate']], axis=-1),
             hovertemplate='<b>%{text}</b><br>' + _tt('Failed') + ': %{customdata[0]:,} / %{customdata[1]:,}'
                           '<br>' + _tt('Fail rate') + ': %{customdata[2]:.1f}%<extra></extra>',
         ))
@@ -9621,6 +9781,44 @@ def server(input, output, session):
         T.apply_theme(fig, title=_tt("Recharge failures by state/province · B2C (bubble = failed orders, colour = fail %)"),
                       height=540, margin=dict(l=0, r=0, t=50, b=0), geo=geo_kw)
         return ui.HTML(T.fig_to_html(fig))
+
+    @render.data_frame
+    @safe_grid
+    def ip_failure_ranking():
+        """Highest-failure regions with the top-failing product & operator — the
+        'where + why' companion to the map. Respects the Category/Operator scope."""
+        if not ip_geo.available():
+            return pd.DataFrame({'Info': ['IP-geo database not installed — see the map above.']})
+        d = ip_fail_base()
+        if d is None or d.empty:
+            return pd.DataFrame({'Info': ['No resolvable B2C rows for the current filters.']})
+        currency = currency_converter(); rate = currency['rate']
+        agg = _ip_region_stats(d, rate, _IP_MAP_MIN)
+        if agg.empty:
+            return pd.DataFrame({'Info': [f'No region reaches the {_IP_MAP_MIN}-order floor.']})
+
+        def _mode(series):
+            s = series.astype(str)
+            s = s[s.str.strip().ne('') & s.str.lower().ne('nan')]
+            m = s.mode()
+            return m.iloc[0] if len(m) else '—'
+        failed = d[d['_failed']]
+        for col, out in (('product', 'top_product'), ('operator', 'top_operator')):
+            if col in failed.columns and not failed.empty:
+                mo = failed.groupby(['_iso2', '_sub'], observed=True)[col].agg(_mode).rename(out)
+                agg = agg.merge(mo, on=['_iso2', '_sub'], how='left')
+            else:
+                agg[out] = '—'
+        agg = agg.sort_values('fail_rate', ascending=False).head(20)
+        out = pd.DataFrame({
+            _tt('Region'): agg['_iso2'].astype(str) + ' · ' + agg['_sub'].astype(str),
+            _tt('Orders'): agg['orders'].astype(int),
+            _tt('Failed'): agg['failed'].astype(int),
+            _tt('Fail %'): agg['fail_rate'].round(1),
+            _tt('Top-failing product'): agg['top_product'].fillna('—'),
+            _tt('Top-failing operator'): agg['top_operator'].fillna('—'),
+        })
+        return out
 
     # ── B2C IP Geographic Origin Analysis ─────────────────────────────────────
 

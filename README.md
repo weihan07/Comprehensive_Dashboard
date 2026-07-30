@@ -11,9 +11,14 @@ denominations, customers, marketing, AI forecasts, and an ad-hoc Sales Explorer.
 
 ## Tabs
 
-Executive Overview · Performance Comparison · Revenue & Orders · Market Intelligence ·
-Operational Intelligence · Supplier & Operator Performance · Product & Denomination Analysis ·
-Customer Analytics · Marketing & Promotions · ⏱ Sales Explorer · 🤖 AI Predictions
+Grouped into 6 top-level nav items (dropdowns):
+
+- **📊 Overview** — verdict line, hero KPIs, Pace-to-Month-End, alerts, movers, trend, geography
+- **📈 Performance** — Performance Comparison (incl. Revenue Bridge) · Revenue & Orders
+- **🌍 Markets & Products** — Market Intelligence · Product & Denomination Analysis
+- **🏭 Operations** — Supplier & Operator Performance (incl. Profit Pool) · Operational Intelligence
+- **👥 Customers** — Customer Analytics (incl. sub-national IP failure map) · Marketing & Promotions
+- **🧰 Tools** — ⏱ Sales Explorer · 🤖 AI Predictions · 📖 Guideline
 
 ## Tech stack
 
@@ -41,6 +46,36 @@ sales_env\Scripts\python.exe -m shiny run sales_dashboard.py --port 8050
 ```
 
 Then open <http://127.0.0.1:8050>.
+
+### Optional: sub-national IP failure map
+
+The **Customer Analytics → 🗺️ Recharge-Failure Map by State/Province** geolocates B2C customer IPs
+offline. It needs one file (not in git):
+
+1. `pip install maxminddb` (already in `requirements.txt`).
+2. Download the free, no-account **DB-IP City Lite** DB and unzip it into `database/`:
+   `https://download.db-ip.com/free/dbip-city-lite-YYYY-MM.mmdb.gz` → `database/dbip-city-lite.mmdb`.
+
+Without the file the rest of the dashboard runs normally; that one map shows a "database not
+installed" hint. No network calls at runtime — raw IPs never leave the machine.
+
+## Updating the data (sidebar → ⚙ Data Management)
+
+All data actions live in the collapsible **⚙ Data Management** block at the bottom of the sidebar.
+Heavy rebuilds now run **off the UI thread**, so the dashboard refreshes **automatically** when they
+finish — no browser refresh needed (older builds could look "stuck" on old numbers because the long
+rebuild froze the session).
+
+| You did this… | Click this | What it does |
+|---|---|---|
+| Edited `Master Data.xlsx` / `Agent Data.xlsx` by hand | **🔄 Rebuild Data Pipeline** | Re-reads the source workbooks (all `Whole*` + history sheets), rebuilds the rolling stores + cache. 5–25 min. |
+| Downloaded new daily CSVs into `Data/…` | **🧹 Clean & Import Daily Files** | Cleans + appends only the new daily files (skips already-imported). Fast. |
+| Want `Data/` to be the *sole* source (one-off) | **♻️ Rebuild ALL from Data/** | Full rebuild from the `Data/` history xlsx + every daily CSV. |
+| Have a single Agent/Master export to add | **▶ Process & Append** (upload) | Uploads one file, de-dupes on order id, appends. |
+
+The rest of the sidebar (above the Enter button) is **filters** — Segment · Order Status · Region ·
+Market · Product Category · Currency · Reporting Period · Date Range. Set them, then press **↵ Enter**
+to apply. **⬇ Download / Export** exports the current filtered view (CSV / Excel / PDF).
 
 ## Data & Security
 
@@ -82,7 +117,11 @@ GitHub.
 | File | Role |
 |------|------|
 | `sales_dashboard.py` | Main app — all tabs, ~120 render functions, filter chain, CSS/JS |
-| `db_utils.py` | Storage layer — rolling parquet stores, dedup/append, cache rebuild, import validation |
+| `db_utils.py` | Storage layer — rolling parquet stores, multi-sheet reader, dedup/append, cache rebuild |
+| `clean_raw.py` | Raw daily-export cleaner + full rebuild from the `Data/` folders |
+| `categories.py` | 6-class product-category taxonomy (raw `product_category` → class) |
+| `charts.py` | Reusable Plotly chart builders (DRY factory) |
+| `ip_geo.py` | Offline IP → state/province geolocation (DB-IP City Lite) for the failure map |
 | `ml_predictions.py` | Revenue forecast, churn prediction, demand forecast |
 | `theme.py` | Palette, Plotly theme, number formatting, country/region/currency maps |
 | `translations.py` | EN ↔ 中文 dictionaries (headings + chart-phrase translator) |
