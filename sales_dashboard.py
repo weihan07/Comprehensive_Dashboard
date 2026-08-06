@@ -977,6 +977,11 @@ DASHBOARD_COLUMNS = [
     "badge_product", "area_code", "recharge_number", "interface_order_id",
     "sales_listed",
     "pin_code", "useepay_order_id",
+    # Aug-2026 source additions — stored so they accumulate; coverage is still
+    # low (see the Data Coverage panel) so nothing is charted off them yet.
+    "supplier_name", "supplier_id", "user_channel", "payment_method",
+    "payment_provider", "paid_time", "recharge_time", "service_fee",
+    "local_currency", "tax_fee", "serial_number",
     # Old parquet caches still have the original Chinese names — read them
     # too so the rename below picks them up without forcing a cache rebuild.
     "面额", "商品信息", "sku名称", "品牌商", "优惠券名称", "优惠券金额",
@@ -1509,15 +1514,29 @@ def _channel_map():
 
 
 def _with_channel(d):
-    """Attach a normalized 'channel' (会员来源) column by joining order user_id to
-    the 用户列表. No-op if the userlist is unavailable."""
-    if d is None or len(d) == 0 or 'user_id' not in d.columns:
+    """Attach a normalized 'channel' (会员来源) column.
+
+    Primary source = the 用户列表 join on user_id (authoritative). Where a user has
+    no userlist match, fall back to the order row's own `user_channel` (用户来源 —
+    a column added to the source export in Aug 2026, ~43% covered and growing).
+    The CSV always wins on conflict; the fallback only fills gaps.
+    """
+    if d is None or len(d) == 0:
         return d
     m = _channel_map()
-    if not m:
+    has_uid = 'user_id' in d.columns
+    has_col = 'user_channel' in d.columns
+    if (not m or not has_uid) and not has_col:
         return d
     d = d.copy()
-    d['channel'] = d['user_id'].astype(str).str.replace(r'\.0$', '', regex=True).map(m)
+    if m and has_uid:
+        d['channel'] = d['user_id'].astype(str).str.replace(r'\.0$', '', regex=True).map(m)
+    else:
+        d['channel'] = pd.NA
+    if has_col:                       # gap-fill only — userlist stays authoritative
+        fb = d['user_channel'].astype('string').str.strip()
+        fb = fb.mask(fb.eq('') | fb.str.lower().isin(['nan', 'none', '--']), pd.NA)
+        d['channel'] = d['channel'].fillna(fb)
     return d
 # Only list regions that actually appear in the data, in the canonical order.
 _present_regions = set(data['region'].dropna().astype(str).unique().tolist()) if 'region' in data.columns else set()
@@ -2181,6 +2200,24 @@ app_ui = ui.page_sidebar(
                            "border-radius: 6px; margin-top: 12px;"
                            "font-size: 0.78em; color: white; max-height: 240px;"
                            "overflow-y: auto;")
+                ),
+
+                # Data coverage of the newer source columns
+                ui.tags.details(
+                    ui.tags.summary(
+                        ui.tags.span("📊 Data Coverage (new columns)", class_="lang-en"),
+                        ui.tags.span("📊 数据覆盖率（新增列）", class_="lang-zh"),
+                        style=("cursor:pointer; font-weight:600; padding:8px 10px;"
+                               "background:rgba(255,255,255,0.14); color:white;"
+                               "border-radius:8px; margin-top:12px; user-select:none;"
+                               "list-style:none; font-size:0.82em;")
+                    ),
+                    ui.tags.small(
+                        "Fill rate of the columns added to the source exports. "
+                        "Wait for ✅ (≥60%) before trusting analysis built on a column.",
+                        style="font-size:0.7em; color:rgba(255,255,255,0.75); display:block; margin:6px 0;"
+                    ),
+                    ui.output_ui("data_coverage_panel"),
                 ),
                 style="padding: 8px 4px;"
             ),
@@ -4478,6 +4515,74 @@ def server(input, output, session):
                 ui.div(f"Master rows: {s['master_rows']:,}", style="color: rgba(255,255,255,0.85);"),
                 ui.div(f"Cache: {'✓' if s['cache_exists'] else '✗'}", style="color: rgba(255,255,255,0.85);"),
             ),
+        )
+
+    # Columns added to the source exports in Aug 2026. They are stored but not
+    # yet charted — this panel shows when each becomes usable.
+    _NEW_COLUMNS = [
+        ("user_channel",     "用户来源"),
+        ("supplier_name",    "接口商名称"),
+        ("supplier_id",      "接口商ID"),
+        ("payment_method",   "支付方式"),
+        ("payment_provider", "支付机构"),
+        ("paid_time",        "支付时间"),
+        ("recharge_time",    "充值时间"),
+        ("service_fee",      "服务费"),
+        ("local_currency",   "当地币币种"),
+        ("tax_fee",          "税费"),
+        ("serial_number",    "序列号"),
+        ("product_category", "商品分类/分类"),
+    ]
+    _COVERAGE_OK = 60.0     # % — below this, don't build analysis on the column
+
+    @render.ui
+    @safe_render
+    def data_coverage_panel():
+        """Fill rate of the newer source columns — overall vs last 30 days.
+        Answers 'when can I start using this column?' without re-reading the xlsx."""
+        df = data_rv()
+        if df is None or df.empty:
+            return ui.HTML('<div style="color:rgba(255,255,255,0.7);">No data loaded.</div>')
+        recent = df
+        if 'order_time' in df.columns:
+            ot = pd.to_datetime(df['order_time'], errors='coerce')
+            mx = ot.max()
+            if pd.notna(mx):
+                recent = df[ot >= mx - pd.Timedelta(days=30)]
+
+        def _fill(frame, col):
+            if col not in frame.columns or not len(frame):
+                return None
+            s = frame[col].astype('string').str.strip()
+            ok = s.notna() & ~s.isin(['', 'nan', 'None', '--', '-'])
+            return ok.mean() * 100
+
+        rows = []
+        for col, zh in _NEW_COLUMNS:
+            overall, last30 = _fill(df, col), _fill(recent, col)
+            if overall is None:
+                rows.append((col, zh, None, None))
+            else:
+                rows.append((col, zh, overall, last30))
+        rows.sort(key=lambda r: (r[2] is None, r[2] or 0))
+
+        def _row(col, zh, overall, last30):
+            if overall is None:
+                badge, txt = "—", "not in cache (rebuild to pick it up)"
+            else:
+                ok = (last30 if last30 is not None else overall) >= _COVERAGE_OK
+                badge = "✅" if ok else "⚠"
+                txt = f"{overall:.0f}% all · {last30:.0f}% last 30d" if last30 is not None else f"{overall:.0f}%"
+            return ui.tags.div(
+                ui.tags.span(badge, style="flex:0 0 18px;"),
+                ui.tags.span(f"{zh}", style="flex:1 1 auto; min-width:0; overflow:hidden;"
+                                            "text-overflow:ellipsis; white-space:nowrap;"),
+                ui.tags.span(txt, style="flex:0 0 auto; opacity:0.8; font-variant-numeric:tabular-nums;"),
+                style="display:flex; gap:6px; align-items:center; padding:2px 0;"
+            )
+        return ui.div(
+            *[_row(*r) for r in rows],
+            style="font-size:0.72em; color:white; max-height:220px; overflow-y:auto;"
         )
 
     # ------------------------------------------------------------------

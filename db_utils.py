@@ -24,6 +24,7 @@ Key functions:
 from __future__ import annotations
 
 import os
+import re as _re
 import time
 from pathlib import Path
 import pandas as pd
@@ -105,6 +106,22 @@ COLUMN_RENAME = {
     "区号": "area_code",           # both — destination calling code
     "充值号码": "recharge_number", # both — recharged phone number (beneficiary)
     "接口商订单号": "interface_order_id",  # both — supplier-side order id
+    # ── Columns added to the source exports in Aug 2026 ────────────────────
+    # Stored so they accumulate from now on; NOT yet used for analytics because
+    # coverage is still 0–43% (they only started being captured ~2026-08-02).
+    # Check the Data Coverage panel before building anything on them.
+    "接口商名称": "supplier_name",     # Master — real supplier/interface name (3%)
+    "接口商id": "supplier_id",         # Master — supplier id (3%)
+    "用户来源": "user_channel",        # Master — acquisition channel (43%)
+    "支付方式": "payment_method",      # Master — 微信支付 / DuitNow QR … (4%)
+    "支付机构": "payment_provider",    # Master — useepay / razer-H5 … (4%)
+    "支付时间": "paid_time",           # both — payment timestamp (2%)
+    "充值时间": "recharge_time",       # both — fulfilment timestamp (2%)
+    "服务费": "service_fee",           # Master — service fee (2.5%); NOT in margin yet
+    "当地币币种": "local_currency",    # Master — local currency code (2.5%)
+    "分类": "product_category",        # Agent — B2B product category (1%)
+    "税费": "tax_fee",                 # Agent — tax (0%)
+    "序列号": "serial_number",         # Agent — PIN serial (mostly '-')
 }
 
 # Source columns we know about but deliberately do not map/use yet.
@@ -112,6 +129,8 @@ COLUMN_RENAME = {
 # during import so schema additions don't go unnoticed.
 KNOWN_PASSTHROUGH_COLUMNS = {
     "date", "segment", "pin码", "用户名", "useepay订单号", "取消原因",
+    # Aug-2026 additions kept as-is (no dashboard use planned yet)
+    "订单id", "unionid", "当地时间", "充值操作", "是否折扣金额", "支付订单号",
 }
 
 
@@ -166,51 +185,84 @@ def archive_upload(src_path, archive_dir: Path, original_name: str | None = None
 _STR_COLS = [
     "订单号", "接口商订单号", "充值号码", "useepay订单号", "订单ID", "unionid",
     "区号", "批次号", "供应商ID", "供应商订单号", "支付订单号", "PIN码", "pin码",
+    "序列号", "接口商ID",
 ]
 _STR_DTYPE = {c: str for c in _STR_COLS}
 
-# Authoritative sheets in the Master/Agent source workbooks. Those workbooks also
-# carry leftover/duplicate sheets (old partitions, raw dumps, "Sheet1") whose rows
-# would double-count or mix a different schema, so the reader selects ONLY:
-#   • every sheet whose name starts with "Whole" — so an overflow sheet ("Whole 2",
-#     …) created when one hits Excel's 1,048,576-row limit is picked up automatically,
-#   • plus the explicit history sheets named below (add a line when you add a new one).
+# ── Authoritative source sheets ─────────────────────────────────────────────
+# The Master/Agent workbooks also carry leftover sheets (old partitions, raw
+# dumps, "Sheet1", a different-schema RM sheet). Reading those would double-count
+# or corrupt the schema, so the reader takes ONLY the authoritative ones.
+#
+# Per-file config wins (file stem → sheets). Master no longer has a "Whole" sheet:
+# its data now lives in "Jul - Dec 2025" + a per-year sheet ("2026", "2027", …).
+SOURCE_SHEETS = {
+    "Master Data": ["Jul - Dec 2025", "2026"],
+    "Agent Data":  ["Whole"],          # already spans Jul 2025 → present
+}
+
+# Fallback rule for any other workbook: every "Whole*" sheet (so an overflow
+# sheet created at Excel's 1,048,576-row limit is picked up) + these history sheets.
 _HISTORY_SHEETS = ["Jul - Dec 2025"]
 
+_YEAR_SHEET = _re.compile(r"^(20\d{2})$")
 
-def _select_source_sheets(sheet_names) -> list:
-    """Authoritative sheets to read from a source workbook: any 'Whole*' sheet plus
-    the named history sheets. Empty → caller falls back to the first sheet."""
-    selected = []
-    for s in sheet_names:
-        name = str(s).strip()
-        if name.lower().startswith("whole") or name in _HISTORY_SHEETS:
-            selected.append(s)
-    return selected
+
+def _select_source_sheets(sheet_names, path=None) -> list:
+    """Authoritative sheets to read from a source workbook.
+
+    * If the workbook is named in ``SOURCE_SHEETS`` → exactly those sheets that
+      exist, **plus** any bare 4-digit-year sheet ("2027") so next year's export
+      needs no code change.
+    * Otherwise → the generic rule: any 'Whole*' sheet + ``_HISTORY_SHEETS``.
+    Empty result → the caller falls back to the first sheet.
+    """
+    names = [str(s).strip() for s in sheet_names]
+    configured = SOURCE_SHEETS.get(Path(path).stem) if path else None
+    if configured:
+        wanted = list(configured)
+        # future-proof: auto-include new per-year sheets (2027, 2028, …)
+        wanted += [n for n in names if _YEAR_SHEET.match(n) and n not in wanted]
+        return [s for s, n in zip(sheet_names, names) if n in wanted]
+    return [s for s, n in zip(sheet_names, names)
+            if n.lower().startswith("whole") or n in _HISTORY_SHEETS]
+
+
+def _strip_id_columns(df: pd.DataFrame) -> pd.DataFrame:
+    """Strip stray whitespace from identifier columns.
+
+    The Aug-2026 exports write IDs with a **leading TAB** (Excel's force-to-text
+    trick) on 58–80% of rows, while older sheets have none — so the same order
+    can appear as both '123' and '\\t123'. Left uncleaned that breaks dedup
+    (double-counting), joins and table display. Strip at read time, before any
+    de-duplication.
+    """
+    for col in _STR_COLS:
+        if col in df.columns:
+            s = df[col].astype("string").str.strip()
+            df[col] = s.mask(s.eq("") | s.str.lower().isin(["nan", "none"]), pd.NA)
+    return df
 
 
 def _read_excel_any_sheet(path: Path) -> pd.DataFrame:
     """Read the authoritative sheets of a source workbook and concatenate them.
 
-    Selects every 'Whole*' sheet (so data split across sheets past Excel's
-    1,048,576-row limit — 'Whole', 'Whole 2', … — is connected) plus the named
-    history sheets (``_HISTORY_SHEETS``), ignoring leftover/duplicate sheets.
-    Identifier columns are forced to text to avoid float-precision corruption, and
-    the union is de-duplicated by 订单号 (keep last) as a safety net so an overlap
-    between sheets never doubles a row. Falls back to the first sheet when no
-    authoritative sheet matches."""
+    Sheet choice comes from ``_select_source_sheets`` (per-file ``SOURCE_SHEETS``
+    config, else the generic 'Whole*' + history rule), ignoring leftover/duplicate
+    sheets. Identifier columns are forced to text to avoid float-precision
+    corruption and stripped of stray whitespace, and the union is de-duplicated by
+    订单号 (keep last) as a safety net so an overlap between sheets never doubles a
+    row. Falls back to the first sheet when no authoritative sheet matches."""
     xls = pd.ExcelFile(path)
-    sheets = _select_source_sheets(xls.sheet_names) or [xls.sheet_names[0]]
+    sheets = _select_source_sheets(xls.sheet_names, path) or [xls.sheet_names[0]]
     frames = []
     for s in sheets:
         df = pd.read_excel(xls, sheet_name=s, dtype=_STR_DTYPE)
         if len(df):
-            frames.append(df)
+            frames.append(_strip_id_columns(df))
     if not frames:
         return pd.DataFrame()
-    if len(frames) == 1:
-        return frames[0]
-    out = pd.concat(frames, ignore_index=True)
+    out = frames[0] if len(frames) == 1 else pd.concat(frames, ignore_index=True)
     if "订单号" in out.columns:
         out = out.drop_duplicates(subset=["订单号"], keep="last").reset_index(drop=True)
     return out
@@ -234,15 +286,18 @@ def _read_data_file(path) -> pd.DataFrame:
             try:
                 if sep is None:
                     # python engine sniffs the separator but doesn't support low_memory
-                    return pd.read_csv(path, encoding=enc, sep=None, engine="python",
-                                       dtype=_STR_DTYPE)
-                return pd.read_csv(path, encoding=enc, low_memory=False, sep=sep,
-                                   dtype=_STR_DTYPE)
+                    return _strip_id_columns(
+                        pd.read_csv(path, encoding=enc, sep=None, engine="python",
+                                    dtype=_STR_DTYPE))
+                return _strip_id_columns(
+                    pd.read_csv(path, encoding=enc, low_memory=False, sep=sep,
+                                dtype=_STR_DTYPE))
             except (UnicodeDecodeError, UnicodeError):
                 continue
         # Last resort: silently replace bad bytes so we still get a frame
-        return pd.read_csv(path, encoding="utf-8", sep=None, engine="python",
-                           encoding_errors="replace", dtype=_STR_DTYPE)
+        return _strip_id_columns(
+            pd.read_csv(path, encoding="utf-8", sep=None, engine="python",
+                        encoding_errors="replace", dtype=_STR_DTYPE))
     raise ValueError(
         f"Unsupported file type: '{path.suffix}'. "
         "Please upload .xlsx, .xls, .xlsm, .csv, or .tsv."
