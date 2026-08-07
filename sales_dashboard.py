@@ -1148,7 +1148,23 @@ def _apply_settlement_currency(df):
             cur = cur.mask(in_cty, "USD")          # default for the country
             cur = cur.mask(looks_local, iso)       # face-value scale → local
 
-    rate = cur.map(_SETTLE_RATES).fillna(_USD_PER_RMB).astype(float)
+    # Per-ORDER-MONTH rate. One static snapshot distorts margin badly: measured
+    # against real ECB rates the mid-2025 snapshot is ~+13% off on MYR and −15%
+    # on IDR — in OPPOSITE directions — so cross-market profit comparisons were
+    # misleading. Months the CSV doesn't cover fall back to the snapshot per
+    # currency (see fx_rates.rate_for_iso).
+    rate = None
+    if 'order_time' in df.columns and fx_rates.dated_max_month():
+        months = pd.to_datetime(df['order_time'], errors='coerce').dt.strftime('%Y-%m')
+        iso_s = cur.astype(str)
+        uniq = pd.DataFrame({'iso': iso_s, 'mon': months}).drop_duplicates().dropna()
+        lut = {(i, m): fx_rates.rate_for_iso(i, m) for i, m in uniq.itertuples(index=False)}
+        rate = pd.Series(list(zip(iso_s, months)), index=df.index).map(lut)
+    if rate is None:
+        rate = pd.Series(pd.NA, index=df.index, dtype="object")
+    # snapshot fallback for undated months / missing order_time
+    rate = pd.to_numeric(rate, errors='coerce')
+    rate = rate.fillna(cur.map(_SETTLE_RATES)).fillna(_USD_PER_RMB).astype(float)
     df['settlement_currency'] = cur
     df['settlement_rmb'] = settle / rate
     return df
@@ -4651,6 +4667,29 @@ def server(input, output, session):
                 rows.append((col, zh, overall, last30))
         rows.sort(key=lambda r: (r[2] is None, r[2] or 0))
 
+        # FX freshness — settlement→RMB (margin!) uses per-order-month rates from
+        # database/fx_rates.csv. Warn when the newest rate month lags the data.
+        fx_max = fx_rates.dated_max_month()
+        data_max = None
+        if 'order_time' in df.columns:
+            mx = pd.to_datetime(df['order_time'], errors='coerce').max()
+            if pd.notna(mx):
+                data_max = mx.strftime('%Y-%m')
+        if not fx_max:
+            fx_badge, fx_txt = "⚠", f"未生成 · 仍用 {fx_rates.RATES_AS_OF} 快照（跑 scripts/update_fx.py）"
+        elif data_max and fx_max < data_max:
+            fx_badge, fx_txt = "⚠", f"截止 {fx_max} · 数据到 {data_max}（跑 scripts/update_fx.py）"
+        else:
+            fx_badge, fx_txt = "✅", f"截止 {fx_max}"
+        fx_row = ui.tags.div(
+            ui.tags.span(fx_badge, style="flex:0 0 18px;"),
+            ui.tags.span("汇率 FX rates", style="flex:1 1 auto; min-width:0; overflow:hidden;"
+                                                "text-overflow:ellipsis; white-space:nowrap;"),
+            ui.tags.span(fx_txt, style="flex:0 0 auto; opacity:0.8;"),
+            style=("display:flex; gap:6px; align-items:center; padding:4px 0; margin-bottom:4px;"
+                   "border-bottom:1px solid rgba(255,255,255,0.15);")
+        )
+
         def _row(col, zh, overall, last30):
             if overall is None:
                 badge, txt = "—", "not in cache (rebuild to pick it up)"
@@ -4666,8 +4705,9 @@ def server(input, output, session):
                 style="display:flex; gap:6px; align-items:center; padding:2px 0;"
             )
         return ui.div(
+            fx_row,
             *[_row(*r) for r in rows],
-            style="font-size:0.72em; color:white; max-height:220px; overflow-y:auto;"
+            style="font-size:0.72em; color:white; max-height:240px; overflow-y:auto;"
         )
 
     # ------------------------------------------------------------------

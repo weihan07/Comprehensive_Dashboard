@@ -218,36 +218,88 @@ COUNTRY_CURRENCY: dict[str, tuple[str, str, float]] = {
 RATES_AS_OF = "2025-06"   # effective month of the indicative snapshot above
 
 _DATED = None             # {country: [(YYYY-MM, rate), ...]} sorted; loaded lazily from CSV
+_DATED_ISO = None         # {iso:     [(YYYY-MM, rate), ...]} sorted — settlement path
+
+# iso -> the snapshot rate above, for fallback when a month predates the CSV
+_SNAPSHOT_BY_ISO: dict[str, float] = {iso: r for (_s, iso, r) in COUNTRY_CURRENCY.values()}
 
 
 def _load_dated():
-    """Optional effective-dated FX overrides from ``database/fx_rates.csv``
-    (columns: country, month [YYYY-MM], rate). Empty dict if the file is absent.
-    Lets the team supply real per-month rates without code changes."""
-    global _DATED
+    """Effective-dated FX rates from ``database/fx_rates.csv``.
+
+    Accepts either an ``iso`` column (what ``scripts/update_fx.py`` writes) or a
+    ``country`` column; ``month`` is YYYY-MM and ``rate`` is local-per-1-RMB.
+    Populates both the country-keyed and the ISO-keyed maps — the display path
+    looks up by country, the settlement path by ISO. Empty when the file is
+    absent, so the dashboard falls back to the snapshot.
+    """
+    global _DATED, _DATED_ISO
     if _DATED is not None:
         return _DATED
     import csv
     from pathlib import Path
-    _DATED = {}
+    _DATED, _DATED_ISO = {}, {}
     path = Path(__file__).parent / "database" / "fx_rates.csv"
     if path.exists():
         try:
+            iso_to_countries: dict[str, list[str]] = {}
+            for ctry, (_s, iso, _r) in COUNTRY_CURRENCY.items():
+                iso_to_countries.setdefault(iso, []).append(ctry)
             with open(path, encoding="utf-8-sig", newline="") as f:
                 for row in csv.DictReader(f):
-                    ctry = (row.get("country") or "").strip()
                     mon = (row.get("month") or "").strip()
                     try:
                         rate = float(row.get("rate"))
                     except (TypeError, ValueError):
                         continue
-                    if ctry and mon:
+                    if not mon:
+                        continue
+                    iso = (row.get("iso") or "").strip().upper()
+                    ctry = (row.get("country") or "").strip()
+                    if iso:
+                        _DATED_ISO.setdefault(iso, []).append((mon, rate))
+                        for c in iso_to_countries.get(iso, []):
+                            _DATED.setdefault(c, []).append((mon, rate))
+                    elif ctry:
                         _DATED.setdefault(ctry, []).append((mon, rate))
-            for k in _DATED:
-                _DATED[k].sort()
+                        base = COUNTRY_CURRENCY.get(ctry)
+                        if base:
+                            _DATED_ISO.setdefault(base[1], []).append((mon, rate))
+            for d in (_DATED, _DATED_ISO):
+                for k in d:
+                    d[k].sort()
         except Exception:
-            _DATED = {}
+            _DATED, _DATED_ISO = {}, {}
     return _DATED
+
+
+def rate_for_iso(iso: str | None, as_of: str | None = None) -> float | None:
+    """RMB→local rate for an ISO code, effective on/before ``as_of`` (YYYY-MM).
+
+    Used by the settlement→RMB conversion, which works in ISO codes. Falls back
+    to the mid-2025 snapshot when the CSV has no entry at or before that month,
+    and returns None for an unknown code.
+    """
+    if not iso:
+        return None
+    iso = str(iso).strip().upper()
+    _load_dated()
+    entries = (_DATED_ISO or {}).get(iso)
+    if entries and as_of:
+        eff = [r for (m, r) in entries if m <= as_of]
+        if eff:
+            return eff[-1]
+    elif entries and not as_of:
+        return entries[-1][1]
+    return _SNAPSHOT_BY_ISO.get(iso)
+
+
+def dated_max_month() -> str | None:
+    """Newest month present in the dated CSV — powers the freshness indicator.
+    None when no CSV is loaded (i.e. everything is on the stale snapshot)."""
+    _load_dated()
+    months = [m for entries in (_DATED_ISO or {}).values() for (m, _r) in entries]
+    return max(months) if months else None
 
 
 def lookup(country: str | None, as_of: str | None = None):
