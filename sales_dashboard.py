@@ -320,6 +320,10 @@ body {
     margin: 12px 8px;
 }
 .chart-row.r21 { grid-template-columns: 2fr 1fr; }
+/* Alerts split into problems | growth — collapse to one column when narrow */
+@media (max-width: 900px) {
+    .alerts-split { grid-template-columns: 1fr !important; }
+}
 .chart-row > .chart-container { margin: 0; min-width: 0; }
 .chart-row .plotly-graph-div { max-width: 100% !important; }
 @media (max-width: 1200px) {
@@ -5250,23 +5254,36 @@ def server(input, output, session):
                            ui.tags.div(*(new_op_cards + new_co_cards),
                                        style="display:flex; flex-direction:column;")]
 
+        # Two columns instead of one tall stack: problems on the left, growth on
+        # the right — same content, roughly half the height.
         return ui.div(
             ui.tags.div(
                 ui.HTML(digest),
                 style=("background: linear-gradient(135deg, #EEF2FF 0%, #F5F3FF 100%);"
-                       "padding: 14px 18px; border-radius: 10px;"
-                       "border-left: 4px solid #5B6CFF; margin-bottom: 6px;"
-                       "color: #1E293B; font-size: 0.95em; line-height: 1.55;")
+                       "padding: 12px 16px; border-radius: 10px;"
+                       "border-left: 4px solid #5B6CFF; margin-bottom: 8px;"
+                       "color: #1E293B; font-size: 0.92em; line-height: 1.5;")
             ),
-            _alert_row("Slipping operators", "🚨", a['slip_ops'], T.DANGER, sym,
-                       "No operators dropping >20% from their 4-week baseline. ✓"),
-            _alert_row("Slipping countries / markets", "🚨", a['slip_cos'], T.DANGER, sym,
-                       "No countries dropping >20% from their 4-week baseline. ✓"),
-            _alert_row("Surging operators", "🚀", a['surge_ops'], T.SUCCESS, sym,
-                       "No operators up >30% from baseline."),
-            _alert_row("Surging countries", "🚀", a['surge_cos'], T.SUCCESS, sym,
-                       "No countries up >30% from baseline."),
-            *new_section,
+            ui.div(
+                ui.div(
+                    _alert_row("Slipping operators", "🚨", a['slip_ops'], T.DANGER, sym,
+                               "No operators dropping >20% from their 4-week baseline. ✓"),
+                    _alert_row("Slipping countries / markets", "🚨", a['slip_cos'], T.DANGER, sym,
+                               "No countries dropping >20% from their 4-week baseline. ✓"),
+                    style="min-width:0;"
+                ),
+                ui.div(
+                    _alert_row("Surging operators", "🚀", a['surge_ops'], T.SUCCESS, sym,
+                               "No operators up >30% from baseline."),
+                    _alert_row("Surging countries", "🚀", a['surge_cos'], T.SUCCESS, sym,
+                               "No countries up >30% from baseline."),
+                    *new_section,
+                    style="min-width:0;"
+                ),
+                style=("display:grid; grid-template-columns:1fr 1fr; gap:14px;"
+                       "align-items:start;"),
+                class_="alerts-split"
+            ),
         )
 
     @render.ui
