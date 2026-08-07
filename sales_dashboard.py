@@ -990,7 +990,8 @@ DASHBOARD_COLUMNS = [
 ]
 CATEGORY_COLUMNS = ["country", "segment", "operator", "product", "product_category",
                     "ip_country", "region", "order_status", "user_source", "brand",
-                    "coupon_used", "new_user_promo", "badge_product", "coupon_name"]
+                    "coupon_used", "new_user_promo", "badge_product", "coupon_name",
+                    "supplier_account"]
 
 # Order status groups (订单状态). Raw values observed in the data:
 #   B2B: 充值成功 / 已退款 / 等待处理
@@ -1187,6 +1188,46 @@ def _merge_product_variants(df):
     return df
 
 
+# ── One supplier, several accounts ───────────────────────────────────────────
+# Some markets are served by a single supplier that runs multiple accounts. The
+# accounts are only distinguishable by a SUFFIX on the supplier order id
+# (接口商订单号), e.g. Malaysia's SRS runs 8288 / 33132 / 8308. They can differ
+# sharply in success rate and margin, so they must be separable.
+# country → [(interface_order_id suffix, display name)]. Add a line per market.
+SUPPLIER_ACCOUNTS = {
+    "Malaysia": [("8288", "SRS-8288"), ("33132", "SRS-33132"), ("8308", "SRS-8308")],
+}
+_ACCOUNT_UNKNOWN = "未知 Unknown"
+
+
+def _with_supplier_account(df):
+    """Derive `supplier_account` from the 接口商订单号 suffix.
+
+    Rows in a configured market with no/unmatched supplier order id become
+    '未知 Unknown' (they are mostly failed orders that never got a supplier
+    receipt — never guessed at). Markets without a rule stay NA so the
+    account UI can hide itself.
+    """
+    if df is None or 'country' not in df.columns:
+        return df
+    df = df.copy()
+    acct = pd.Series(pd.NA, index=df.index, dtype="object")
+    if 'interface_order_id' in df.columns:
+        ids = df['interface_order_id'].astype('string').str.strip()
+        country = df['country'].astype(str).str.strip()
+        for cty, rules in SUPPLIER_ACCOUNTS.items():
+            in_cty = country == cty
+            if not in_cty.any():
+                continue
+            acct = acct.mask(in_cty, _ACCOUNT_UNKNOWN)
+            # longest suffix first so e.g. '33132' can't be shadowed by a shorter one
+            for suffix, label in sorted(rules, key=lambda r: -len(r[0])):
+                hit = in_cty & ids.str.endswith(suffix, na=False)
+                acct = acct.mask(hit, label)
+    df['supplier_account'] = acct
+    return df
+
+
 def _enrich_columns(df):
     """Cross-segment enrichment using the newly-loaded columns.
 
@@ -1218,6 +1259,7 @@ def _enrich_columns(df):
             s = df[col].astype('string').str.strip()
             df[col] = s.where(s.isin(_YESNO_OK), pd.NA)
     df = _merge_product_variants(df)
+    df = _with_supplier_account(df)
     # Case-fold merge for operator ('Du' / 'du' → one label, the most frequent case).
     if 'operator' in df.columns:
         o = df['operator'].astype('string').str.strip()
@@ -1683,6 +1725,7 @@ _GUIDELINE_TABS = [
     ("🤝", "Supplier & Operator Performance", "供应商绩效", [
         ("🤝 Operator Snapshot", "🤝 运营商快照", "KPI cards", "GMV/orders/客单价/margin/Top-3 conc.", "营业额/订单/客单价/毛利/前3集中度。"),
         ("⚠️ Supplier Concentration Risk", "⚠️ 供应商集中度风险", "KPI flag", "Top-3 operator share (🔴 if >80%).", "前3运营商占比（>80% 标红）。"),
+        ("🔑 Supplier Account Comparison", "🔑 供应商账号对比", "Table + line", "One supplier, several accounts (接口商订单号 suffix): success/fail/margin per account + volume migration.", "同一供应商多账号（按接口商订单号后缀）：各账号成功率/失败率/毛利 + 切量迁移趋势。"),
         ("💰 Gross Margin by Operator / 📈 Margin % Trend", "💰 各运营商毛利 / 📈 毛利率趋势", "Bar & lines", "Absolute & rate margin per operator.", "各运营商毛利额与毛利率。"),
         ("💰 Profit Pool (GMV vs Margin%)", "💰 利润池（GMV vs 毛利率）", "Bubble scatter", "Market bubbles; bottom-right = high GMV, thin margin (renegotiate).", "市场气泡；右下=高流水薄利，优先重谈。"),
         ("📋 Operator Scorecard", "📋 运营商评分卡", "Table (Excel)", "Full per-operator KPIs.", "各运营商完整指标。"),
@@ -2003,6 +2046,10 @@ app_ui = ui.page_sidebar(
             ui.output_ui("category_sub_ui"),
             class_="filter-section"
         ),
+
+        # Supplier account (one supplier, several accounts — e.g. Malaysia SRS).
+        # Hidden automatically when the dataset has no multi-account market.
+        ui.output_ui("supplier_account_filter_ui"),
 
         ui.div(
             ui.output_ui("label_currency"),
@@ -3066,6 +3113,9 @@ app_ui = ui.page_sidebar(
                     ui.output_ui("supplier_concentration_card"),
                     class_="chart-container"
                 ),
+                # One supplier, several accounts (e.g. Malaysia SRS 8288/33132/8308).
+                # Auto-hides when the current selection has fewer than 2 accounts.
+                ui.output_ui("supplier_account_section"),
                 ui.div(
                     _bh3("💰 Gross Margin by Operator (Revenue − Cost of Goods)", "💰 各运营商毛利润（收入 − 结算成本）",
                          _help("Gross Margin = Revenue − Settlement Price. Thin margins are renegotiation targets.")),
@@ -3872,6 +3922,7 @@ def server(input, output, session):
     applied_country = reactive.Value("All")
     applied_category_top = reactive.Value([])   # list of selected top categories ([] = all)
     applied_category_subs = reactive.Value([])
+    applied_supplier_account = reactive.Value([])  # [] = all accounts
     applied_currency = reactive.Value("RMB")
     applied_trend_period = reactive.Value("Daily")
     applied_date_from = reactive.Value(session_min_date)
@@ -3918,6 +3969,10 @@ def server(input, output, session):
             except Exception:
                 _cat_subs = []
         applied_category_subs.set(_cat_subs)
+        try:
+            applied_supplier_account.set(list(input.supplier_account_f() or []))
+        except Exception:
+            applied_supplier_account.set([])
         applied_currency.set(input.currency() or "RMB")
         applied_trend_period.set(input.trend_period() or "Daily")
         applied_date_from.set(input.date_from())
@@ -3964,6 +4019,7 @@ def server(input, output, session):
             "region":       "Region / Continent",
             "country":      "Market (Country)",
             "category":     "Product Category",
+            "supplier_account": "Supplier Account",
             "currency":     "Reporting Currency",
             "trend_period": "Reporting Period",
             "date_range":   "Date Range",
@@ -3974,6 +4030,7 @@ def server(input, output, session):
             "region":       "地区 / 洲",
             "country":      "市场（国家）",
             "category":     "商品分类",
+            "supplier_account": "供应商账号",
             "currency":     "报告货币",
             "trend_period": "报告周期",
             "date_range":   "日期范围",
@@ -4030,6 +4087,34 @@ def server(input, output, session):
     @safe_render
     def label_category():
         return ui.h4(_L("category"), style="margin-top:0;")
+
+    @render.ui
+    @safe_render
+    def supplier_account_filter_ui():
+        """Supplier-account filter — only rendered when the data actually has
+        multi-account markets (see SUPPLIER_ACCOUNTS), so it stays invisible for
+        everyone else."""
+        d = data_rv()
+        if d is None or 'supplier_account' not in d.columns:
+            return ui.HTML("")
+        accts = sorted(d['supplier_account'].dropna().astype(str).unique().tolist())
+        if len(accts) < 2:
+            return ui.HTML("")
+        return ui.div(
+            ui.h4(_L("supplier_account"), style="margin-top:0;"),
+            ui.input_selectize(
+                "supplier_account_f", None,
+                choices={a: a for a in accts}, selected=[], multiple=True,
+                options={"placeholder": "All accounts / 全部账号"},
+            ),
+            ui.tags.small(
+                ui.tags.span("One supplier can run several accounts (told apart by the "
+                             "supplier order-id suffix).", class_="lang-en"),
+                ui.tags.span("同一供应商可能有多个账号（按接口商订单号后缀区分）。", class_="lang-zh"),
+                style="display:block; font-size:0.72em; color:rgba(255,255,255,0.7); margin-top:4px;"
+            ),
+            class_="filter-section"
+        )
 
     @render.ui
     @safe_render
@@ -4715,13 +4800,20 @@ def server(input, output, session):
             return df[df['product_category'].astype(str).str.strip().isin(keep)]
         return _apply_global_exclusions(df)
 
+    def _apply_supplier_account(df):
+        """Scope to the chosen supplier account(s). Empty selection = all."""
+        accts = applied_supplier_account()
+        if accts and df is not None and 'supplier_account' in df.columns:
+            return df[df['supplier_account'].astype(str).isin([str(a) for a in accts])]
+        return df
+
     @reactive.Calc
     def filtered_base_calc():
         """Segment/region/country/category/date filters — WITHOUT the order-status
         filter, so the Order Status analytics section can still see
         refunded/cancelled orders. Core metrics drop 电子钱包 / Touch'n Go unless
         a category is explicitly selected."""
-        df = _apply_category_or_exclusions(data_rv().copy())
+        df = _apply_supplier_account(_apply_category_or_exclusions(data_rv().copy()))
         segment = applied_segment()
         region = applied_region() if 'region' in df.columns else None
         country = applied_country()
@@ -4754,7 +4846,7 @@ def server(input, output, session):
     
     @reactive.Calc
     def previous_period_base():
-        df = _apply_category_or_exclusions(data_rv().copy())
+        df = _apply_supplier_account(_apply_category_or_exclusions(data_rv().copy()))
         segment = applied_segment()
         region = applied_region() if 'region' in df.columns else None
         country = applied_country()
@@ -7308,6 +7400,127 @@ def server(input, output, session):
                       "If top 3 operators account for >80% of GMV, consider supplier diversification."),
             style="display: flex; flex-wrap: wrap; gap: 12px;"
         )
+
+    # ── One supplier, several accounts (Malaysia SRS 8288 / 33132 / 8308) ─────
+
+    @reactive.Calc
+    def _supplier_account_stats():
+        """Per-account orders / GMV / success / fail / margin. None when the
+        current selection has fewer than 2 accounts (nothing to compare)."""
+        d = filtered_base_calc()          # all statuses — success & fail rates need them
+        if d is None or d.empty or 'supplier_account' not in d.columns:
+            return None
+        d = d[d['supplier_account'].notna()]
+        if d.empty or d['supplier_account'].astype(str).nunique() < 2:
+            return None
+        currency = currency_converter(); rate = currency['rate']
+        scol = _settle_col(d)
+        st = d['order_status'].astype(str)
+        d = d.assign(_ok=st.eq('充值成功'),
+                     _fail=st.isin(['已退款', '已取消']))
+        oid = 'order_id' if 'order_id' in d.columns else None
+        rows = []
+        for acct, x in d.groupby('supplier_account', observed=True):
+            if not len(x):
+                continue
+            succ = x[x['_ok']]
+            gmv = float(succ['sales'].sum() * rate) if 'sales' in x.columns else 0.0
+            cogs = (float(pd.to_numeric(succ[scol], errors='coerce').sum() * rate)
+                    if scol in x.columns else 0.0)
+            top_op = "—"
+            if 'operator' in x.columns:
+                vc = x['operator'].astype(str).replace({'': None, 'nan': None}).dropna().value_counts()
+                if len(vc):
+                    top_op = vc.index[0]
+            rows.append({
+                'account': str(acct),
+                'orders': int(x[oid].nunique()) if oid else len(x),
+                'gmv': gmv,
+                'success_rate': x['_ok'].mean() * 100,
+                'fail_rate': x['_fail'].mean() * 100,
+                'margin_pct': ((gmv - cogs) / gmv * 100) if gmv else float('nan'),
+                'top_operator': top_op,
+            })
+        if not rows:
+            return None
+        return pd.DataFrame(rows).sort_values('gmv', ascending=False), currency
+
+    @render.ui
+    @safe_render
+    def supplier_account_section():
+        """Whole section — renders nothing unless the selection spans 2+ accounts."""
+        if _supplier_account_stats() is None:
+            return ui.HTML("")
+        return ui.TagList(
+            ui.div(
+                _bh3("🔑 Supplier Account Comparison", "🔑 供应商账号对比",
+                     _help("One supplier can run several accounts, told apart by the supplier "
+                           "order-id (接口商订单号) suffix — e.g. Malaysia's SRS runs 8288 / 33132 / "
+                           "8308. Accounts can differ sharply in success rate and margin. "
+                           "'未知' = orders with no supplier order id (mostly failures that never "
+                           "got a receipt) — never guessed at.")),
+                _bp("Same supplier, different accounts — compare success rate and margin before "
+                    "routing more volume to one.",
+                    "同一供应商的不同账号 —— 在把更多量切给某个账号之前，先比成功率和毛利率。"),
+                ui.output_data_frame("supplier_account_table"),
+                class_="data-table"
+            ),
+            ui.div(
+                _bh3("📈 Account Volume / Migration Trend", "📈 账号切量 / 迁移趋势"),
+                _bp("Order volume per account over time — shows migrations and ramp-ups.",
+                    "各账号订单量走势 —— 可直接看出切量与迁移。"),
+                ui.output_ui("supplier_account_trend"),
+                class_="chart-container"
+            ),
+        )
+
+    @render.data_frame
+    @safe_grid
+    def supplier_account_table():
+        res = _supplier_account_stats()
+        if res is None:
+            return pd.DataFrame({'Info': ['Only one supplier account in the current selection.']})
+        agg, currency = res
+        sym = currency['symbol']
+        return pd.DataFrame({
+            _tt('Account'):      agg['account'],
+            _tt('Orders'):       agg['orders'].astype(int),
+            _tt('GMV'):          [T.format_number(v, sym) for v in agg['gmv']],
+            _tt('Success %'):    agg['success_rate'].round(1),
+            _tt('Fail %'):       agg['fail_rate'].round(1),
+            _tt('Margin %'):     agg['margin_pct'].round(1),
+            _tt('Top operator'): agg['top_operator'],
+        })
+
+    @render.ui
+    @safe_render
+    def supplier_account_trend():
+        res = _supplier_account_stats()
+        if res is None:
+            return _no_data()
+        d = filtered_base_calc()
+        d = d[d['supplier_account'].notna()]
+        if d.empty or 'order_time' not in d.columns:
+            return _no_data()
+        d = d.copy()
+        d['_b'] = _bucket_time(d['order_time'])
+        oid = 'order_id' if 'order_id' in d.columns else None
+        grp = d.groupby(['_b', 'supplier_account'], observed=True)
+        s = (grp[oid].nunique() if oid else grp.size()).reset_index(name='orders')
+        fig = go.Figure()
+        for i, acct in enumerate(sorted(s['supplier_account'].astype(str).unique())):
+            sub = s[s['supplier_account'].astype(str) == acct].sort_values('_b')
+            fig.add_trace(go.Scatter(
+                x=sub['_b'], y=sub['orders'], mode='lines+markers', name=acct,
+                line=dict(width=2.5, color=T.PALETTE[i % len(T.PALETTE)]),
+                marker=dict(size=5),
+                hovertemplate='<b>%{x}</b><br>' + acct + ': %{y:,} ' + _tt('orders') + '<extra></extra>',
+            ))
+        T.apply_theme(fig, title=_tt(f"{_period_word()} orders by supplier account"),
+                      xaxis_title=None, yaxis_title=_tt("Orders"), height=380,
+                      hovermode='x unified', margin=dict(l=10, r=10, t=55, b=10),
+                      legend=dict(orientation="h", yanchor="bottom", y=-0.22, xanchor="left", x=0))
+        return ui.HTML(T.fig_to_html(fig))
 
     @render.ui
     @safe_render
